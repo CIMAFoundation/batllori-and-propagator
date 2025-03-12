@@ -1,10 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import random
+from data import load_data, create_colormap, G_INDEX, S_INDEX, C_INDEX, B_INDEX
 
+types_to_corine = [G_INDEX, S_INDEX, C_INDEX, B_INDEX]
+
+
+cmap, norm = create_colormap()
 # Parametri
-grid_size = 30
-timesteps = 5000
+
+timesteps = 100
 TSF_classes = 3
 beta_g3 = 0.1
 beta_g = [0, 0.5 * beta_g3, beta_g3]
@@ -18,13 +22,10 @@ flammability = [0.8, 0.5, 0.2, 0.1]
 feedback_type = "strong"
 
 
-# Inizializzazione della griglia
-grid = np.empty((grid_size, grid_size), dtype=object)
-for i in range(grid_size):
-    for j in range(grid_size):
-        proportions = np.array([[0.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]])
-        TSF = random.randint(1, 100)
-        grid[i, j] = {"proportions": proportions, "TSF": TSF}
+data_years = load_data()
+grid = data_years[1990]
+grid_orig = grid.copy()
+n_rows, n_cols = grid.shape
 
 # Dinamiche a livello di sistema
 G_system = np.zeros(timesteps)
@@ -32,14 +33,32 @@ S_system = np.zeros(timesteps)
 C_system = np.zeros(timesteps)
 B_system = np.zeros(timesteps)
 
+def get_dominant_type(grid):
+    raster = np.zeros((n_rows, n_cols))
+    for i in range(n_rows):
+        for j in range(n_cols):
+            cell = grid[i, j]
+            proportions = cell["proportions"]
+            proportions = np.sum(proportions, axis=0)
+
+            dominant_type = np.argmax(proportions)
+
+            raster[i, j] = types_to_corine[dominant_type]
+    return raster
+
+def plot_raster(raster, t):
+    plt.figure()
+    plt.imshow(raster, cmap=cmap, norm=norm)
+    plt.title(f"Timestep {t+1}")
+    plt.show()
 
 
 # Simulazione
 for t in range(timesteps):
     G_total, S_total, C_total, B_total = 0, 0, 0, 0
-    
-    for i in range(grid_size):
-        for j in range(grid_size):
+
+    for i in range(n_rows):
+        for j in range(n_cols):
             cell = grid[i, j]
             proportions = cell["proportions"]
             TSF = cell["TSF"]
@@ -79,6 +98,7 @@ for t in range(timesteps):
             # Ignizione del fuoco
             ignition = np.random.binomial(1, F)
             
+            
             if ignition:
                 TSF = 0
                 B = Bold * (1 - alpha_b * F)  + Cold* betac * (1 - F)
@@ -103,20 +123,23 @@ for t in range(timesteps):
             S_total += np.sum(grid[i, j]["proportions"][:, 1])  # Somma la colonna S per tutti i livelli TSF
             C_total += np.sum(grid[i, j]["proportions"][:, 2])  # Somma la colonna C per tutti i livelli TSF
             B_total += np.sum(grid[i, j]["proportions"][:, 3])  # Somma la colonna B per tutti i livelli TSF
-
         
+    raster = get_dominant_type(grid)
+    plot_raster(raster, t)
     
     # Calcola proporzioni a livello di sistema
-    G_system[t] = G_total / (grid_size ** 2)
-    S_system[t] = S_total / (grid_size ** 2)
-    C_system[t] = C_total / (grid_size ** 2)
-    B_system[t] = B_total / (grid_size ** 2)
+    G_system[t] = G_total / (n_rows * n_cols)
+    S_system[t] = S_total / (n_rows * n_cols)
+    C_system[t] = C_total / (n_rows * n_cols)
+    B_system[t] = B_total / (n_rows * n_cols)
             
     print(f"Timestep {t+1} - Grass: {G_system[t]:.4f}, Shrub: {S_system[t]:.4f}, Coniferous: {C_system[t]:.4f}, Broadleaved: {B_system[t]:.4f}")
 
-# Grafici dei risultati
-# Grafico 1
-plt.figure(figsize=(10, 6))
+    # Grafici dei risultati
+    # Grafico 1
+
+plt.figure()
+
 plt.plot(range(timesteps), G_system, label="Grassland", color="green", linewidth=1.5)
 plt.plot(range(timesteps), S_system, label="Shrubland", color="yellow", linewidth=1.5)
 plt.plot(range(timesteps), C_system, label="Coniferous", color=(0.5, 0.25, 0), linewidth=1.5)
@@ -128,8 +151,6 @@ plt.legend()
 plt.grid()
 
 
-
-
-# Layout
 plt.tight_layout()
 plt.show()
+

@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from data import load_data, create_colormap, G_INDEX, S_INDEX, C_INDEX, B_INDEX
+from propagator_module import get_simulator, get_initial_veg, create_boundary_conditions, start_simulation, get_fire_scar
+from data import grid_from_raster, G_INDEX, S_INDEX, C_INDEX, B_INDEX, create_colormap
 
 types_to_corine = [G_INDEX, S_INDEX, C_INDEX, B_INDEX]
 
@@ -8,7 +9,7 @@ types_to_corine = [G_INDEX, S_INDEX, C_INDEX, B_INDEX]
 cmap, norm = create_colormap()
 # Parametri
 
-timesteps = 100
+timesteps = 10
 TSF_classes = 3
 beta_g3 = 0.1
 beta_g = [0, 0.5 * beta_g3, beta_g3]
@@ -21,11 +22,9 @@ alpha_b = 1 - (alpha_s+alpha_c)
 flammability = [0.8, 0.5, 0.2, 0.1]
 feedback_type = "strong"
 
-
-data_years = load_data()
-grid = data_years[1990]
-grid_orig = grid.copy()
-n_rows, n_cols = grid.shape
+# load initial vegetation from propagator utils
+veg = get_initial_veg()
+n_rows, n_cols = veg.shape
 
 # Dinamiche a livello di sistema
 G_system = np.zeros(timesteps)
@@ -44,6 +43,8 @@ def get_dominant_type(grid):
             dominant_type = np.argmax(proportions)
 
             raster[i, j] = types_to_corine[dominant_type]
+
+    raster = raster.astype(np.uint8)
     return raster
 
 def plot_raster(raster, t):
@@ -53,10 +54,19 @@ def plot_raster(raster, t):
     plt.show()
 
 
+grid = grid_from_raster(veg)
 # Simulazione
 for t in range(timesteps):
-    G_total, S_total, C_total, B_total = 0, 0, 0, 0
+    print(f"Simulating timestep {t+1}...")
+    simulator = get_simulator(veg)
+    boundary_conditions = create_boundary_conditions(veg, probability_of_ignition=0.00001)
+    start_simulation(simulator, boundary_conditions, time_limit=6*60)
+    fire_scar = get_fire_scar(simulator)
+    # count number of pixels in fire_scar and print it
+    fire_scar_count = np.sum(fire_scar[:])
+    print(f"Number of pixels in fire scar: {fire_scar_count}")
 
+    G_total, S_total, C_total, B_total = 0, 0, 0, 0
     for i in range(n_rows):
         for j in range(n_cols):
             cell = grid[i, j]
@@ -92,14 +102,10 @@ for t in range(timesteps):
                     F = f * Cold * flammability[2]
                 else:
                     F = f * Bold * flammability[3]
-            else:
-                F = f * (Gold * flammability[0] + Sold * flammability[1] + Cold * flammability[2]+ Bold * flammability[3])
+
+            fire = fire_scar[i, j] > 0
             
-            # Ignizione del fuoco
-            ignition = np.random.binomial(1, F)
-            
-            
-            if ignition:
+            if fire:
                 TSF = 0
                 B = Bold * (1 - alpha_b * F)  + Cold* betac * (1 - F)
                 C = Cold * (1 - alpha_c * F - betac * (1 - F))  + Bold * alpha_b * F / 3 + Sold * betas * (1 - F) 
@@ -124,8 +130,10 @@ for t in range(timesteps):
             C_total += np.sum(grid[i, j]["proportions"][:, 2])  # Somma la colonna C per tutti i livelli TSF
             B_total += np.sum(grid[i, j]["proportions"][:, 3])  # Somma la colonna B per tutti i livelli TSF
         
-    raster = get_dominant_type(grid)
-    plot_raster(raster, t)
+    veg = get_dominant_type(grid)
+    veg_with_fire = veg.copy()
+    veg_with_fire[fire_scar > 0] = 7
+    plot_raster(veg_with_fire, t)
     
     # Calcola proporzioni a livello di sistema
     G_system[t] = G_total / (n_rows * n_cols)
@@ -142,8 +150,8 @@ plt.figure()
 
 plt.plot(range(timesteps), G_system, label="Grassland", color="green", linewidth=1.5)
 plt.plot(range(timesteps), S_system, label="Shrubland", color="yellow", linewidth=1.5)
-plt.plot(range(timesteps), C_system, label="Coniferous", color=(0.5, 0.25, 0), linewidth=1.5)
-plt.plot(range(timesteps), B_system, label="Broadleaved", color="black", linewidth=1.5)
+plt.plot(range(timesteps), C_system, label="Coniferous", color="yellowgreen", linewidth=1.5)
+plt.plot(range(timesteps), B_system, label="Broadleaved", color=(0.5, 0.25, 0), linewidth=1.5)
 plt.xlabel("Timestep")
 plt.ylabel("Proportion")
 plt.title("System-Level Vegetation Proportions Over Time")

@@ -51,6 +51,7 @@ def grid_from_raster(raster: np.ndarray) -> np.ndarray:
     return grid
 
 
+
 def load_data():
     data = {}
     for y in YEARS:
@@ -65,11 +66,12 @@ def create_colormap():
     colors = {
         G_INDEX: "green",
         S_INDEX: "yellow",
-        C_INDEX: (0.5, 0.25, 0),
-        B_INDEX: "black",
+        C_INDEX: "yellowgreen",
+        B_INDEX: (0.5, 0.25, 0),
         2: "gray",
         5: "green",
-        6: "black",
+        6: (0.5, 0.25, 0),
+        7: "black",
     }
     cmap = mcolors.ListedColormap([colors[i] for i in range(len(colors))])
     bounds = [i - 0.5 for i in range(len(colors) + 1)]
@@ -91,4 +93,4 @@ def plot_data():
             plt.show()
 
 
-plot_data()
+#plot_data()

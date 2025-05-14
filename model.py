@@ -118,7 +118,7 @@ for t in range(timesteps):
             cell["TSF"] = TSF
             
    
-            # Accumula i totali per G, S, e W
+            # Accumula i totali per G, S, C e B
             G_total += np.sum(grid[i, j]["proportions"][:, 0])  # Somma la colonna G per tutti i livelli TSF
             S_total += np.sum(grid[i, j]["proportions"][:, 1])  # Somma la colonna S per tutti i livelli TSF
             C_total += np.sum(grid[i, j]["proportions"][:, 2])  # Somma la colonna C per tutti i livelli TSF
@@ -153,4 +153,3 @@ plt.grid()
 
 plt.tight_layout()
 plt.show()
-

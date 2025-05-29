@@ -1,4 +1,4 @@
-# FIRE-AND-DROUGHT MODEL
+# Modified Batllori Model
 
 The modified Batllori model simulates vegetation dynamics in a fire-prone ecosys-
 tem, representing the landscape as a grid of cells, each of which contains a mix

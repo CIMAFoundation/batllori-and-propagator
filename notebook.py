@@ -14,7 +14,6 @@ def _():
     from data import create_colormap
     from batllori import BatlloriModel
 
-
     return (
         BatlloriModel,
         create_boundary_conditions,
@@ -35,8 +34,8 @@ def _(create_colormap, get_initial_data, plt):
 
     # load initial vegetation from propagator utils
     dem, initial_veg = get_initial_data(
-        "data/dem.tif",
-        "data/veg.tif"
+        "data/dem_monti_pisani.tif",
+        "data/clc_2018.tif"
     )
 
     def plot_raster(raster, t):
@@ -44,8 +43,7 @@ def _(create_colormap, get_initial_data, plt):
         plt.imshow(raster, cmap=cmap, norm=norm)
         plt.title(f"Timestep {t+1}")
         plt.show()
-
-    return dem, initial_veg, plot_raster
+    return cmap, dem, initial_veg, norm, plot_raster
 
 
 @app.cell
@@ -70,7 +68,7 @@ def _(
     # Simulazione
     for t in range(timesteps):
         print(f"Simulating timestep {t+1}...")
-    
+
         # generate random ignition points, using poisson distribution (ideally should be based on extreme events number)
         n_ignitions = np.random.poisson(5)
         ignition_coords = []
@@ -112,9 +110,24 @@ def _(
         veg_with_fire = veg.copy()
         veg_with_fire[fire_scars > 0] = 4
         plot_raster(veg_with_fire, t)
-    
 
 
+    return (veg,)
+
+
+@app.cell
+def _(cmap, initial_veg, norm, np, plt, veg):
+
+
+    # Assuming `initial_veg` and `vegetation_after_sim` are defined elsewhere in your code
+    difference_map = np.abs(initial_veg.astype(np.int32) - veg.astype(np.int32))
+
+    plt.imshow(difference_map, cmap=cmap, norm=norm)
+    plt.colorbar(label='Vegetation Difference')
+    plt.title('Difference Map: Initial vs End Vegetation')
+    plt.xlabel('Columns')
+    plt.ylabel('Rows')
+    plt.show()
     return
 
 

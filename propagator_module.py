@@ -4,18 +4,33 @@ from propagator.core import (  # type: ignore
     FUEL_SYSTEM_LEGACY,
     BoundaryConditions,
     Propagator,
+    PropagatorOutOfBoundsError
 )
 from propagator.io import PropagatorDataFromGeotiffs # type: ignore
 
 
-loader = PropagatorDataFromGeotiffs(
-    dem_file="data/dem_clip.tif",
-    veg_file="data/veg_clip.tif",
-)
+def get_initial_data(dem_file: str, veg_file: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load initial DEM and vegetation data from GeoTIFF files.
+    Parameters
+    ----------
+    veg_file : str
+        Path to the vegetation GeoTIFF file.
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        A tuple containing the DEM and vegetation numpy arrays.
+    """
 
-
-def get_simulator(veg: np.ndarray) -> Propagator:
+    loader = PropagatorDataFromGeotiffs(
+        dem_file=dem_file,
+        veg_file=veg_file,
+    )
     dem = loader.get_dem()
+    veg = loader.get_veg()
+    return dem, veg
+
+
+def get_simulator(dem: np.ndarray,veg: np.ndarray) -> Propagator:
     simulator = Propagator(
         dem=dem,
         veg=veg,
@@ -25,10 +40,6 @@ def get_simulator(veg: np.ndarray) -> Propagator:
         out_of_bounds_mode="raise",
     )
     return simulator
-
-def get_initial_veg() -> np.ndarray:
-    veg = loader.get_veg()
-    return veg
 
 
 def create_boundary_conditions(
@@ -102,7 +113,11 @@ def start_simulation(
         if next_time > time_limit:
             break
 
-        simulator.step()
+        try:
+            simulator.step()
+        except PropagatorOutOfBoundsError:
+            print("Simulation stopped: fire reached out of bounds area.")
+            break
 
 def get_fire_scar(simulator: Propagator, threshold: float) -> np.ndarray:
     """Retrieve the fire scar raster from the simulator after the simulation.

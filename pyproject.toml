@@ -9,9 +9,15 @@ dependencies = [
     "matplotlib==3.10.0",
     "notebook>=7.4.2",
     "numpy==2.2.2",
-    "propagator",
+    "openai>=2.6.1",
+    "propagator[io]",
     "rasterio>=1.4.3",
 ]
 
 [tool.uv.sources]
 propagator = { git = "https://github.com/CIMAFoundation/propagator_sim.git" }
+
+[dependency-groups]
+dev = [
+    "marimo[mcp]>=0.17.2",
+]

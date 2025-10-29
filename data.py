@@ -15,43 +15,6 @@ C_INDEX = 4  # Coniferous
 B_INDEX = 0  # Broadleaved
 O_INDEX = 2  # Other
 
-
-def grid_from_raster(raster: np.ndarray) -> np.ndarray:
-    grid = np.empty(raster.shape, dtype=object)
-    for i in range(raster.shape[0]):
-        for j in range(raster.shape[1]):
-            index = raster[i, j]
-            if index == G_INDEX or index == 5:  # Grassland
-                proportions = np.array(
-                    [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
-                )
-            elif index == S_INDEX:  # Shrubland
-                proportions = np.array(
-                    [[0.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
-                )
-            elif index == C_INDEX:  # Coniferous
-                proportions = np.array(
-                    [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
-                )
-            elif index == B_INDEX or index == 6:  # Broadleaved
-                proportions = np.array(
-                    [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]]
-                )
-            else:
-                proportions = np.array(
-                    [
-                        [0.25, 0.25, 0.25, 0.25],
-                        [0.25, 0.25, 0.25, 0.25],
-                        [0.25, 0.25, 0.25, 0.25],
-                    ]
-                )
-
-            TSF = random.randint(1, 100)
-            grid[i, j] = {"proportions": proportions, "TSF": TSF}
-    return grid
-
-
-
 def load_data():
     data = {}
     for y in YEARS:

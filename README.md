@@ -17,19 +17,15 @@ Based on [Cumulative effects of fire and drought in Mediterranean ecosystems](ht
 
 ### How to run
 
-Create a virtualenvironment and install the required dependencies
+Create a virtual environment with `uv` and install the required dependencies
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+uv sync --dev
 ```
 
-Run the model
+Explore the notebook
 
 ```bash
-python model.py
+uv run marimo edit notebook.py
 ```
 
-#### Example output
-![output image](images/output.png)

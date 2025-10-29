@@ -13,7 +13,6 @@ def _():
     from propagator_module import get_initial_data, get_simulator, create_boundary_conditions, start_simulation, get_fire_scar
     from data import create_colormap
     from batllori import BatlloriModel
-
     return (
         BatlloriModel,
         create_boundary_conditions,
@@ -21,6 +20,7 @@ def _():
         get_fire_scar,
         get_initial_data,
         get_simulator,
+        mo,
         np,
         plt,
         start_simulation,
@@ -47,6 +47,14 @@ def _(create_colormap, get_initial_data, plt):
 
 
 @app.cell
+def _(mo, np):
+    steps = np.array([1, 2, 3, 4, 5,8,9,10])
+    slider = mo.ui.slider(steps=steps)
+    slider
+    return (slider,)
+
+
+@app.cell
 def _(
     BatlloriModel,
     create_boundary_conditions,
@@ -56,15 +64,21 @@ def _(
     initial_veg,
     np,
     plot_raster,
+    slider,
     start_simulation,
 ):
     # initialize models
     # Parametri
-    timesteps = 10
+    timesteps = slider.value
 
 
     batllori_model = BatlloriModel(veg=initial_veg, timesteps=timesteps)
     veg = initial_veg.copy()
+
+    # iterate on the number of steps and get the information about extreme events from data
+    # use info on extreme events to generate: number of ignition (vary poissons' distribution parameter).
+    # for each event
+
     # Simulazione
     for t in range(timesteps):
         print(f"Simulating timestep {t+1}...")
@@ -110,7 +124,6 @@ def _(
         veg_with_fire = veg.copy()
         veg_with_fire[fire_scars > 0] = 4
         plot_raster(veg_with_fire, t)
-
 
     return (veg,)
 

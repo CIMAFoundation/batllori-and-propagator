@@ -1,15 +1,11 @@
 import numpy as np
-from propagator.functions import moist_proba_correction_1, p_time_wang
-from propagator.loader.geotiff import PropagatorDataFromGeotiffs
-from propagator.propagator import (
+
+from propagator.core import (  # type: ignore
+    FUEL_SYSTEM_LEGACY,
+    BoundaryConditions,
     Propagator,
-    PropagatorBoundaryConditions,
 )
-
-
-v0 = np.loadtxt("data/v0_table.txt")
-prob_table = np.loadtxt("data/prob_table.txt")
-p_veg = np.loadtxt("data/p_vegetation.txt")
+from propagator.io import PropagatorDataFromGeotiffs # type: ignore
 
 
 loader = PropagatorDataFromGeotiffs(
@@ -18,18 +14,15 @@ loader = PropagatorDataFromGeotiffs(
 )
 
 
-def get_simulator(veg: np.ndarray):
+def get_simulator(veg: np.ndarray) -> Propagator:
     dem = loader.get_dem()
     simulator = Propagator(
         dem=dem,
         veg=veg,
         realizations=10,
-        ros_0=v0,
-        probability_table=prob_table,
-        veg_parameters=p_veg,
+        fuels=FUEL_SYSTEM_LEGACY,
         do_spotting=False,
-        p_time_fn=p_time_wang,
-        p_moist_fn=moist_proba_correction_1,
+        out_of_bounds_mode="raise",
     )
     return simulator
 
@@ -38,34 +31,71 @@ def get_initial_veg() -> np.ndarray:
     return veg
 
 
-def create_boundary_conditions(dem: np.ndarray, probability_of_ignition=0.001) -> list[PropagatorBoundaryConditions]:
+def create_boundary_conditions(
+        dem: np.ndarray,
+        wind_speed: float, 
+        wind_direction: float,
+        fuel_moisture: float,
+        ignition_coords: tuple[int, int],
+    ) -> BoundaryConditions:
+    """Create boundary conditions for the simulation including ignition mask, wind, and moisture.   
+    Parameters
+    ----------
+    dem : np.ndarray
+        A 2D numpy array representing the digital elevation model.
+    wind_speed : float
+        The wind speed to be applied uniformly across the grid. [km/h]
+    wind_direction : float
+        The wind direction to be applied uniformly across the grid. [degrees, clockwise, north->south is 0°]
+    fuel_moisture : float
+        The fuel moisture content to be applied uniformly across the grid. [%]
+    probability_of_ignition : float
+        The probability of ignition for each cell in the grid (optional, default is 0.001).
+    Returns
+    -------
+    BoundaryConditions
+        The boundary conditions including ignition mask, wind, and moisture.
+    """
     ignition_array = np.zeros(dem.shape, dtype=np.uint8)
-    for row in range(ignition_array.shape[0]):
-        for col in range(ignition_array.shape[1]):
-            if np.random.rand() < probability_of_ignition:
-                ignition_array[row, col] = 1 
-
-    boundary_conditions: PropagatorBoundaryConditions = PropagatorBoundaryConditions(
+    ignition_array[ignition_coords] = 1
+    
+    boundary_conditions: BoundaryConditions = BoundaryConditions(
         time=0,
-        ignitions=ignition_array,
-        wind_speed=np.ones(dem.shape) * 0,
-        wind_dir=np.ones(dem.shape) * 0,
-        moisture=np.ones(dem.shape) * 0.05,
+        ignition_mask=ignition_array,
+        wind_speed=np.ones(dem.shape) * wind_speed,
+        wind_dir=np.ones(dem.shape) * wind_direction,
+        moisture=np.ones(dem.shape) * fuel_moisture,
     )
     
     return boundary_conditions
 
 def start_simulation(
         simulator: Propagator, 
-        boundary_conditions: PropagatorBoundaryConditions,
-        time_limit: float,
+        boundary_conditions: BoundaryConditions,
+        time_limit: int,
     ):
+    """
+    Start the fire simulation with given boundary conditions up to a time limit (in seconds).
+
+    Parameters
+    ----------
+    simulator : Propagator
+        The fire propagator simulator instance.
+    boundary_conditions : BoundaryConditions
+        The boundary conditions including ignition mask, wind, and moisture.
+    time_limit : int
+        The maximum simulation time in seconds.
+    """
     
-    if boundary_conditions.ignitions.sum() == 0:
+    if boundary_conditions.ignition_mask is None:
+        return
+    
+    if boundary_conditions.ignition_mask.sum() == 0:
         return
     
     simulator.set_boundary_conditions(boundary_conditions)
-    while True:
+    next_time = 0
+    while next_time < time_limit:
         next_time = simulator.next_time()
         if next_time is None:
             break
@@ -74,7 +104,21 @@ def start_simulation(
 
         simulator.step()
 
-def get_fire_scar(simulator: Propagator) -> np.ndarray:
+def get_fire_scar(simulator: Propagator, threshold: float) -> np.ndarray:
+    """Retrieve the fire scar raster from the simulator after the simulation.
+    
+    Parameters
+    ----------
+    simulator : Propagator
+        The fire propagator simulator instance.
+    threshold : float
+        The threshold for determining burned areas.
+    
+    Returns
+    -------
+    np.ndarray
+        A 2D numpy array representing the fire scar (1 for burned, 0 for unburned).
+    """
     output = simulator.get_output()
     fire_probability = output.fire_probability
-    return fire_probability>0
+    return fire_probability > threshold

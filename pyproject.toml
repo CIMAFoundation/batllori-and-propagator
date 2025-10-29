@@ -1,5 +1,5 @@
 [project]
-name = "fire-and-drought-model"
+name = "fire-and-fuel-model"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -9,5 +9,9 @@ dependencies = [
     "matplotlib==3.10.0",
     "notebook>=7.4.2",
     "numpy==2.2.2",
+    "propagator",
     "rasterio>=1.4.3",
 ]
+
+[tool.uv.sources]
+propagator = { git = "https://github.com/CIMAFoundation/propagator_sim.git" }

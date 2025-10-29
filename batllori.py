@@ -76,14 +76,15 @@ class BatlloriModel:
         self.C_system = np.zeros(self.timesteps)
         self.B_system = np.zeros(self.timesteps)
         self.grid = grid_from_raster(self.veg)
-        self.n_rows = len(self.grid)
-        self.n_cols = len(self.grid[0])
+        self.n_rows, self.n_cols = self.grid.shape
 
 
     def step(self, fire_scars: np.ndarray):
         G_total, S_total, C_total, B_total = 0, 0, 0, 0
         for i in range(self.n_rows):
+            print(f"Processing row {i+1}/{self.n_rows}", end="\r")
             for j in range(self.n_cols):
+                
                 cell = self.grid[i, j]
                 proportions = cell["proportions"]
                 TSF = cell["TSF"]

@@ -113,6 +113,8 @@ def start_simulation(
         if next_time > time_limit:
             break
 
+        # print(f"Simulation time: {next_time} seconds")
+
         try:
             simulator.step()
         except PropagatorOutOfBoundsError:

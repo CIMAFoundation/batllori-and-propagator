@@ -80,9 +80,12 @@ def _(
             y = np.random.randint(0, n_cols)
             ignition_coords.append((x, y))
 
+        print(f"Generated {n_ignitions} ignition points.")
+
         fire_scars = np.zeros((n_rows, n_cols), dtype=np.uint8)
         # now we will simulate the fires, indipendently
         for coord in ignition_coords:
+            print(f"Simulating fire at ignition point {coord}...")
             simulator = get_simulator(dem, veg)
             # extract wind speed, wind direction, fuel moisture from data 
             # for now, set them to constant values
@@ -91,7 +94,7 @@ def _(
             fuel_moisture = 5.0  # %
 
             boundary_conditions = create_boundary_conditions(veg, wind_speed, wind_direction, fuel_moisture, coord)
-            start_simulation(simulator, boundary_conditions, time_limit=6*60)
+            start_simulation(simulator, boundary_conditions, time_limit=6*60*60)
             fire_scar = get_fire_scar(simulator, threshold=0.3)
 
             fire_scars = np.maximum(fire_scars, fire_scar.astype(np.uint8))

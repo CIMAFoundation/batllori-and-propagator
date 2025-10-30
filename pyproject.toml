@@ -14,10 +14,10 @@ dependencies = [
     "rasterio>=1.4.3",
 ]
 
-[tool.uv.sources]
-propagator = { git = "https://github.com/CIMAFoundation/propagator_sim.git" }
-
 [dependency-groups]
 dev = [
     "marimo[mcp]>=0.17.2",
 ]
+
+[tool.uv.sources]
+propagator = { git = "https://github.com/CIMAFoundation/propagator_sim/", rev = "34cb0b8c7513542ef14143d54743b8c91dbcf33d" }

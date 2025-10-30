@@ -121,7 +121,7 @@ def start_simulation(
             print("Simulation stopped: fire reached out of bounds area.")
             break
 
-def get_fire_scar(simulator: Propagator, threshold: float) -> np.ndarray:
+def get_fire_scar(simulator: Propagator, threshold: float) -> tuple[np.ndarray, np.ndarray]:
     """Retrieve the fire scar raster from the simulator after the simulation.
     
     Parameters
@@ -138,4 +138,6 @@ def get_fire_scar(simulator: Propagator, threshold: float) -> np.ndarray:
     """
     output = simulator.get_output()
     fire_probability = output.fire_probability
-    return fire_probability > threshold
+    fire_intensity = output.fli_mean
+    return fire_probability > threshold, fire_intensity
+

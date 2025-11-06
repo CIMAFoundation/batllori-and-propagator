@@ -72,7 +72,7 @@ def create_boundary_conditions(
     
     boundary_conditions: BoundaryConditions = BoundaryConditions(
         time=0,
-        ignition_mask=ignition_array,
+        ignitions=ignition_array,
         wind_speed=np.ones(dem.shape) * wind_speed,
         wind_dir=np.ones(dem.shape) * wind_direction,
         moisture=np.ones(dem.shape) * fuel_moisture,
@@ -98,10 +98,12 @@ def start_simulation(
         The maximum simulation time in seconds.
     """
     
-    if boundary_conditions.ignition_mask is None:
+    if boundary_conditions.ignitions is None:
         return
     
-    if boundary_conditions.ignition_mask.sum() == 0:
+    if isinstance(boundary_conditions.ignitions, np.ndarray) and boundary_conditions.ignitions.sum() == 0:
+        return
+    elif isinstance(boundary_conditions.ignitions, list) and len(boundary_conditions.ignitions) == 0:
         return
     
     simulator.set_boundary_conditions(boundary_conditions)

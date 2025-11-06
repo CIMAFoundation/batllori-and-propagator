@@ -47,7 +47,7 @@ def grid_from_raster(raster: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 @dataclass
-class BatlloriModel:
+class Batllori4CL:
     veg: np.ndarray
     timesteps: int
     feedback_type: str = "vegetation"

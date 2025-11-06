@@ -5,19 +5,19 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "ipykernel>=6.29.5",
-    "matplotlib==3.10.0",
-    "notebook>=7.4.2",
-    "numpy==2.2.2",
+    "matplotlib==3.10.7",
+    "numpy==2.3.4",
     "openai>=2.6.1",
-    "propagator[io]",
     "rasterio>=1.4.3",
+    "marimo[mcp]>=0.17.3",
+    "propagator[io]",
 ]
 
 [dependency-groups]
 dev = [
-    "marimo[mcp]>=0.17.2",
+        "notebook>=7.4.7",
+        "ipykernel>=7.1.0",
 ]
 
 [tool.uv.sources]
-#propagator = { git = "https://github.com/CIMAFoundation/propagator_sim/", rev = "34cb0b8c7513542ef14143d54743b8c91dbcf33d" }
+propagator = { git = "https://github.com/CIMAFoundation/propagator_sim" }

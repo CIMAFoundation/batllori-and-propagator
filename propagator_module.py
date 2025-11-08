@@ -6,35 +6,14 @@ from propagator.core import (  # type: ignore
     Propagator,
     PropagatorOutOfBoundsError
 )
-from propagator.io import PropagatorDataFromGeotiffs # type: ignore
 
 
-def get_initial_data(dem_file: str, veg_file: str) -> tuple[np.ndarray, np.ndarray]:
-    """Load initial DEM and vegetation data from GeoTIFF files.
-    Parameters
-    ----------
-    veg_file : str
-        Path to the vegetation GeoTIFF file.
-    Returns
-    -------
-    tuple[np.ndarray, np.ndarray]
-        A tuple containing the DEM and vegetation numpy arrays.
-    """
 
-    loader = PropagatorDataFromGeotiffs(
-        dem_file=dem_file,
-        veg_file=veg_file,
-    )
-    dem = loader.get_dem()
-    veg = loader.get_veg()
-    return dem, veg
-
-
-def get_simulator(dem: np.ndarray,veg: np.ndarray) -> Propagator:
+def get_simulator(dem: np.ndarray,veg: np.ndarray, realizations: int = 10) -> Propagator:
     simulator = Propagator(
         dem=dem,
         veg=veg,
-        realizations=10,
+        realizations=realizations,
         fuels=FUEL_SYSTEM_LEGACY,
         do_spotting=False,
         out_of_bounds_mode="raise",
@@ -67,15 +46,12 @@ def create_boundary_conditions(
     BoundaryConditions
         The boundary conditions including ignition mask, wind, and moisture.
     """
-    ignition_array = np.zeros(dem.shape, dtype=np.uint8)
-    ignition_array[ignition_coords] = 1
-    
     boundary_conditions: BoundaryConditions = BoundaryConditions(
         time=0,
-        ignitions=ignition_array,
-        wind_speed=np.ones(dem.shape) * wind_speed,
-        wind_dir=np.ones(dem.shape) * wind_direction,
-        moisture=np.ones(dem.shape) * fuel_moisture,
+        ignitions=[ignition_coords],
+        wind_speed=wind_speed,
+        wind_dir=wind_direction,
+        moisture=fuel_moisture,
     )
     
     return boundary_conditions
@@ -107,20 +83,14 @@ def start_simulation(
         return
     
     simulator.set_boundary_conditions(boundary_conditions)
-    next_time = 0
-    while next_time < time_limit:
-        next_time = simulator.next_time()
-        if next_time is None:
-            break
-        if next_time > time_limit:
-            break
-
-        # print(f"Simulation time: {next_time} seconds")
-
+    
+    while True:
         try:
             simulator.step()
         except PropagatorOutOfBoundsError:
             print("Simulation stopped: fire reached out of bounds area.")
+            break
+        if simulator.time >= time_limit:
             break
 
 def get_fire_scar(simulator: Propagator, threshold: float) -> tuple[np.ndarray, np.ndarray]:

@@ -5,6 +5,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
+MAX_DURATION = 12
 
 
 df = pd.read_csv('data/extreme_events.csv', parse_dates=['start', 'end'])
@@ -67,6 +68,12 @@ def sample_event_durations(random_state: int | None = None) -> list[int]:
     # distribuzione globale delle durate
     durations = df["duration_h"].to_numpy()
     sampled_durations = rng.choice(durations, size=n_events, replace=True)
+
+    # create a probability based on duration (duration/MAX_DURATION)
+    probabilities = (sampled_durations / MAX_DURATION)**2
+    # resample based on probabilities
+    mask = rng.random(size=n_events) < probabilities
+    sampled_durations = sampled_durations[mask]
 
     return sampled_durations.tolist()
 

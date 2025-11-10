@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Iterable
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
 import rasterio as rio
 
@@ -16,6 +17,13 @@ from propagator_module import (
     get_simulator,
     start_simulation,
 )
+
+TIMESTEPS = 100
+MEAN_WIND_SPEED = 10.0
+STD_WIND_SPEED = 5.0
+MEAN_FUEL_MOISTURE = 10.0
+STD_FUEL_MOISTURE = 5.0
+SEED = 42
 
 
 DATA_DIR = Path("data")
@@ -38,14 +46,28 @@ BATLLORI_LABELS = [
     "Latifoglie - mature (Rm)",
 ]
 
-@dataclass(frozen=True)
-class SimulationConfig:
-    timesteps: int = 100
-    mean_wind_speed: float = 10.0
-    std_wind_speed: float = 5.0
-    mean_fuel_moisture: float = 10.0
-    std_fuel_moisture: float = 5.0
-    seed: int | None = 42
+PROPAGATOR_CLASS_LABELS = {
+    0: "Nodata",
+    1: "Latifoglie",
+    2: "Vegetazione arbustiva",
+    3: "Non vegetato",
+    4: "Praterie",
+    5: "Conifere",
+}
+PROPAGATOR_CLASS_COLORS = [
+    "#d0d0d0",  # nodata / fallback
+    "#1b7837",  # broadleaves
+    "#b35806",  # shrubs
+    "#f7f7f7",  # bare/non-vegetated
+    "#a6d96a",  # grasslands
+    "#00441b",  # conifers
+]
+PROPAGATOR_BOUNDS = np.arange(len(PROPAGATOR_CLASS_LABELS) + 1) - 0.5
+PROPAGATOR_CMAP = ListedColormap(PROPAGATOR_CLASS_COLORS)
+PROPAGATOR_CMAP.set_bad("#f0f0f0")
+PROPAGATOR_NORM = BoundaryNorm(PROPAGATOR_BOUNDS, PROPAGATOR_CMAP.N)
+
+
 
 
 @dataclass(frozen=True)
@@ -65,10 +87,10 @@ def veg_propagator_to_batllori(land_cover: np.ndarray) -> np.ndarray:
     vector_map = {
         1: np.array([0, 0, 0, 0, 0.1, 0.9]),  # latifoglie -> Ry, Rm
         2: np.array([0, 1, 0, 0, 0, 0]),  # vegetazione arbustiva -> U
-        3: np.full(BATLLORI_CLASSES, -3333.0),  # aree non vegetate
         4: np.array([1, 0, 0, 0, 0, 0]),  # praterie -> A
         5: np.array([0, 0, 0.2, 0.8, 0, 0]),  # conifere -> Sy, Sm
         0: np.full(BATLLORI_CLASSES, -9999.0),  # nodata
+        3: np.full(BATLLORI_CLASSES, -3333.0),  # aree non vegetate
         -3333: np.full(BATLLORI_CLASSES, -3333.0),
         -9999: np.full(BATLLORI_CLASSES, -9999.0),
     }
@@ -109,40 +131,6 @@ def veg_batllori_to_propagator(veg: np.ndarray) -> np.ndarray:
     return land_cover
 
 
-def main(config: SimulationConfig = SimulationConfig()) -> None:
-    rng = np.random.default_rng(config.seed)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    dem, raw_veg, mask = load_rasters()
-    masked_veg = np.where(mask, raw_veg, 0)
-    batllori_initial = veg_propagator_to_batllori(masked_veg)
-    batllori_initial = apply_initial_noise(batllori_initial, rng)
-
-    batllori_model = Batllori6CL(initial_map=batllori_initial)
-    warm_up_model(batllori_model, steps=WARMUP_STEPS)
-
-    batllori_veg = batllori_model.get_vegetation_map()
-    initial_proportions = compute_initial_proportions(batllori_veg, mask)
-    proportions_history = np.full((BATLLORI_CLASSES, config.timesteps), np.nan)
-
-    for timestep in range(config.timesteps):
-        batllori_veg = batllori_model.get_vegetation_map()
-        propagator_veg = veg_batllori_to_propagator(batllori_veg)
-
-        fire_events = generate_fire_events()
-        print(f"Timestep {timestep + 1}: {len(fire_events)} ignitions.")
-
-        fire_scars, _ = run_fire_events(fire_events, dem, propagator_veg, rng, config)
-        batllori_model.step(fire_scars)
-
-        update_proportions_history(
-            batllori_veg, mask, initial_proportions, proportions_history, timestep
-        )
-        save_vegetation_and_fire_map(batllori_veg, fire_scars, timestep)
-        save_proportions_over_time(proportions_history)
-        save_batllori_heatmaps(batllori_veg, mask, timestep)
-
-    plt.close("all")
 
 
 def load_rasters() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -188,13 +176,12 @@ def run_fire_events(
     dem: np.ndarray,
     veg: np.ndarray,
     rng: np.random.Generator,
-    config: SimulationConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
     fire_scars_list = []
     fire_intensities_list = []
 
     for event in events:
-        fire_scar, intensity = simulate_single_fire(dem, veg, event, rng, config)
+        fire_scar, intensity = simulate_single_fire(dem, veg, event, rng)
         fire_scars_list.append(fire_scar)
         fire_intensities_list.append(intensity)
 
@@ -212,14 +199,13 @@ def simulate_single_fire(
     veg: np.ndarray,
     event: FireEvent,
     rng: np.random.Generator,
-    config: SimulationConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run the external propagator for a single ignition event."""
     simulator = get_simulator(dem, veg)
-    wind_speed = max(0.0, float(rng.normal(config.mean_wind_speed, config.std_wind_speed)))
+    wind_speed = max(0.0, float(rng.normal(MEAN_WIND_SPEED, STD_WIND_SPEED)))
     wind_direction = float(rng.uniform(0, 360))
     fuel_moisture = max(
-        0.0, float(rng.normal(config.mean_fuel_moisture, config.std_fuel_moisture))
+        0.0, float(rng.normal(MEAN_FUEL_MOISTURE, STD_FUEL_MOISTURE))
     )
     boundary_conditions = create_boundary_conditions(
         veg,
@@ -242,19 +228,34 @@ def update_proportions_history(
     for batllori_class in range(BATLLORI_CLASSES):
         batllori_slice = batllori_veg[:, :, batllori_class]
         batllori_class_sum = np.where(mask & (batllori_slice >= 0), batllori_slice, 0).sum()
-        history[batllori_class, timestep] = (
-            batllori_class_sum / initial_proportions[batllori_class]
-        )
+        baseline = initial_proportions[batllori_class]
+        if baseline > 0:
+            ratio = batllori_class_sum / baseline
+            history[batllori_class, timestep] = ratio
+        else:
+            history[batllori_class, timestep] = np.nan
 
 
 def save_vegetation_and_fire_map(
     batllori_veg: np.ndarray,
     fire_scars: np.ndarray,
+    mask: np.ndarray,
     timestep: int,
 ) -> None:
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.imshow(veg_batllori_to_propagator(batllori_veg), cmap="Set2")
-    ax.contour(fire_scars, [0.5], colors=["red"])
+    propagator_map = veg_batllori_to_propagator(batllori_veg)
+    masked_map = np.where(mask, propagator_map, np.nan)
+    im = ax.imshow(masked_map, cmap=PROPAGATOR_CMAP, norm=PROPAGATOR_NORM)
+    masked_fire = np.where(mask, fire_scars, np.nan)
+    ax.contour(np.ma.masked_invalid(masked_fire), [0.5], colors=["red"])
+    cbar = fig.colorbar(
+        im,
+        ax=ax,
+        ticks=list(PROPAGATOR_CLASS_LABELS.keys()),
+        shrink=0.8,
+        label="Vegetation / fuel class",
+    )
+    cbar.ax.set_yticklabels(PROPAGATOR_CLASS_LABELS.values())
     fig.savefig(OUTPUT_DIR / f"veg_map{timestep + 1:02d}_fire_scar.png")
     plt.close(fig)
 
@@ -277,20 +278,60 @@ def save_proportions_over_time(proportions_history: np.ndarray) -> None:
 def save_batllori_heatmaps(
     batllori_veg: np.ndarray,
     mask: np.ndarray,
+    fire_scars: np.ndarray,
     timestep: int,
 ) -> None:
     fig, axes = plt.subplots(2, 3, figsize=(12, 8))
     axes = axes.ravel()
+    masked_fire = np.where(mask, fire_scars, np.nan)
     for batllori_class in range(BATLLORI_CLASSES):
         axis = axes[batllori_class]
         axis.set_title(f"Class {batllori_class + 1}")
         batllori_slice = batllori_veg[:, :, batllori_class]
-        image = axis.imshow(np.where(mask & (batllori_slice >= 0), batllori_slice, np.nan), cmap="Greens")
+        masked_slice = np.where(mask & (batllori_slice >= 0), batllori_slice, np.nan)
+        image = axis.imshow(masked_slice, cmap="Greens", vmin=0.0, vmax=1.0)
+        axis.contour(np.ma.masked_invalid(masked_fire), [0.5], colors=["red"], linewidths=0.5)
         fig.colorbar(image, ax=axis)
     fig.tight_layout()
     fig.savefig(OUTPUT_DIR / f"batllori_proportions_timestep_{timestep + 1:02d}.png")
     plt.close(fig)
 
+
+
+def main() -> None:
+    rng = np.random.default_rng(SEED)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    dem, raw_veg, mask = load_rasters()
+    masked_veg = np.where(mask, raw_veg, 0)
+    batllori_initial = veg_propagator_to_batllori(masked_veg)
+    batllori_initial = apply_initial_noise(batllori_initial, rng)
+
+    batllori_model = Batllori6CL(initial_map=batllori_initial)
+    warm_up_model(batllori_model, steps=WARMUP_STEPS)
+
+    batllori_veg = batllori_model.get_vegetation_map()
+    initial_proportions = compute_initial_proportions(batllori_veg, mask)
+    proportions_history = np.full((BATLLORI_CLASSES, TIMESTEPS), np.nan)
+
+    for timestep in range(TIMESTEPS):
+        batllori_veg = batllori_model.get_vegetation_map()
+        propagator_veg = veg_batllori_to_propagator(batllori_veg)
+
+        fire_events = generate_fire_events()
+        print(f"Timestep {timestep + 1}: {len(fire_events)} ignitions.")
+
+        fire_scars, _ = run_fire_events(fire_events, dem, propagator_veg, rng)
+        batllori_model.step(fire_scars)
+
+        update_proportions_history(
+            batllori_veg, mask, initial_proportions, proportions_history, timestep
+        )
+        save_vegetation_and_fire_map(batllori_veg, fire_scars, mask, timestep)
+        save_proportions_over_time(proportions_history)
+        save_batllori_heatmaps(batllori_veg, mask, fire_scars, timestep)
+
+    plt.close("all")
 
 if __name__ == "__main__":
     main()

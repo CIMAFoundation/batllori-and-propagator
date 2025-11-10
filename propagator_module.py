@@ -84,7 +84,7 @@ def start_simulation(
     
     simulator.set_boundary_conditions(boundary_conditions)
     
-    while True:
+    while simulator.next_time() is not None:
         try:
             simulator.step()
         except PropagatorOutOfBoundsError:

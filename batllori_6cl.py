@@ -140,6 +140,15 @@ class Batllori6CL:
 
 
 @njit(cache=True)
+def clip(value: float, min_value: float, max_value: float) -> float:
+    if value < min_value:
+        return min_value
+    elif value > max_value:
+        return max_value
+    else:
+        return value
+
+@njit(cache=True)
 def _step_kernel(
     proportions,
     tsf,
@@ -271,12 +280,12 @@ def _step_kernel(
 
                 tsf[i, j] = 0
 
-            proportions[i, j, 0] = A
-            proportions[i, j, 1] = U
-            proportions[i, j, 2] = Sy
-            proportions[i, j, 3] = Sm
-            proportions[i, j, 4] = Ry
-            proportions[i, j, 5] = Rm
+            proportions[i, j, 0] = clip(A, 0, 1)
+            proportions[i, j, 1] = clip(U, 0, 1)
+            proportions[i, j, 2] = clip(Sy, 0, 1)
+            proportions[i, j, 3] = clip(Sm, 0, 1)
+            proportions[i, j, 4] = clip(Ry, 0, 1)
+            proportions[i, j, 5] = clip(Rm, 0, 1)
 
             totals[0] += A
             totals[1] += U

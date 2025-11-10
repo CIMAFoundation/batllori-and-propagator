@@ -284,10 +284,10 @@ def save_batllori_heatmaps(
     fig, axes = plt.subplots(2, 3, figsize=(12, 8))
     axes = axes.ravel()
     masked_fire = np.where(mask, fire_scars, np.nan)
-    for batllori_class in range(BATLLORI_CLASSES):
-        axis = axes[batllori_class]
-        axis.set_title(f"Class {batllori_class + 1}")
-        batllori_slice = batllori_veg[:, :, batllori_class]
+    for idx, batllori_class in enumerate(BATLLORI_LABELS):
+        axis = axes[idx]
+        axis.set_title(f"Class {batllori_class}")
+        batllori_slice = batllori_veg[:, :, idx]
         masked_slice = np.where(mask & (batllori_slice >= 0), batllori_slice, np.nan)
         image = axis.imshow(masked_slice, cmap="Greens", vmin=0.0, vmax=1.0)
         axis.contour(np.ma.masked_invalid(masked_fire), [0.5], colors=["red"], linewidths=0.5)

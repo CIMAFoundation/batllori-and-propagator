@@ -40,7 +40,7 @@ BATLLORI_LABELS = [
 
 @dataclass(frozen=True)
 class SimulationConfig:
-    timesteps: int = 30
+    timesteps: int = 100
     mean_wind_speed: float = 10.0
     std_wind_speed: float = 5.0
     mean_fuel_moisture: float = 10.0

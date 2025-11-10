@@ -45,7 +45,6 @@ class Batllori6CL:
 
         self.tsf = np.zeros((self.grid_size, self.grid_size), dtype=int)
         self.total_cells = self.grid_size * self.grid_size
-        self.num_fires = 0
 
         # Pre-compute coefficients that only depend on parameters.
         self.mu_s = self.params.rho_s * self.params.fraction
@@ -53,8 +52,10 @@ class Batllori6CL:
         self.mu_r = self.params.rho_r * self.params.fraction
         self.mu_rm = self.params.rho_rm * self.params.fraction
 
-    def step(self, fire_mask: np.ndarray) -> Dict[str, np.ndarray | float | int]:
+    def step(self, fire_mask: np.ndarray|None = None) -> Dict[str, np.ndarray | float | int]:
         """Advance the model by one timestep using a boolean fire mask."""
+        if fire_mask is None:
+            fire_mask = np.zeros((self.grid_size, self.grid_size), dtype=bool)
         mask = np.ascontiguousarray(np.asarray(fire_mask, dtype=bool))
         if mask.shape != (self.grid_size, self.grid_size):
             raise ValueError("fire_mask must match the model grid size")
@@ -82,14 +83,12 @@ class Batllori6CL:
             self.mu_r,
             self.mu_rm,
         )
-        self.num_fires += int(fires_this_step)
 
         averages = totals / self.total_cells
         return {
             "totals": totals,
             "averages": averages,
-            "fires_this_step": fires_this_step,
-            "cumulative_fires": self.num_fires,
+            "fires_this_step": fires_this_step
         }
 
     def update_vegetation_map(self, new_map: np.ndarray, reset_tsf: bool = False) -> None:

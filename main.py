@@ -10,7 +10,12 @@ import numpy as np
 import rasterio as rio
 
 from batllori_6cl import Batllori6CL
-from extract_probabilities import extract_ignition_points, sample_event_durations
+from extract_probabilities import (
+    ProbabilityInputs,
+    extract_ignition_points,
+    load_probability_inputs,
+    sample_event_durations,
+)
 from propagator_module import (
     create_boundary_conditions,
     get_fire_scar,
@@ -133,13 +138,14 @@ def veg_batllori_to_propagator(veg: np.ndarray) -> np.ndarray:
 
 
 
-def load_rasters() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def load_rasters(mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     with rio.open(DEM_PATH) as dem_src:
         dem = dem_src.read(1).astype("int16")
     with rio.open(VEG_PATH) as veg_src:
         veg = veg_src.read(1).astype("int8")
-    with rio.open(MASK_PATH) as mask_src:
-        mask = mask_src.read(1) > 0
+    if mask is None:
+        with rio.open(MASK_PATH) as mask_src:
+            mask = mask_src.read(1) > 0
     return dem, veg, mask
 
 
@@ -165,9 +171,14 @@ def compute_initial_proportions(batllori_veg: np.ndarray, mask: np.ndarray) -> n
     return initial_proportions
 
 
-def generate_fire_events() -> list[FireEvent]:
-    event_durations = sample_event_durations()
-    ignition_coords = extract_ignition_points(len(event_durations))
+def generate_fire_events(
+    probability_data: ProbabilityInputs,
+    rng: np.random.Generator,
+) -> list[FireEvent]:
+    event_durations = sample_event_durations(rng=rng, data=probability_data)
+    ignition_coords = extract_ignition_points(
+        len(event_durations), rng=rng, data=probability_data
+    )
     return [FireEvent(duration, coord) for duration, coord in zip(event_durations, ignition_coords)]
 
 
@@ -302,7 +313,8 @@ def main() -> None:
     rng = np.random.default_rng(SEED)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    dem, raw_veg, mask = load_rasters()
+    probability_data = load_probability_inputs()
+    dem, raw_veg, mask = load_rasters(mask=probability_data.mask)
     masked_veg = np.where(mask, raw_veg, 0)
     batllori_initial = veg_propagator_to_batllori(masked_veg)
     batllori_initial = apply_initial_noise(batllori_initial, rng)
@@ -318,7 +330,7 @@ def main() -> None:
         batllori_veg = batllori_model.get_vegetation_map()
         propagator_veg = veg_batllori_to_propagator(batllori_veg)
 
-        fire_events = generate_fire_events()
+        fire_events = generate_fire_events(probability_data, rng)
         print(f"Timestep {timestep + 1}: {len(fire_events)} ignitions.")
 
         fire_scars, _ = run_fire_events(fire_events, dem, propagator_veg, rng)

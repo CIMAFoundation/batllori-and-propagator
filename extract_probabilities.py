@@ -1,46 +1,71 @@
-#%%
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+
+import numpy as np
 import pandas as pd
 import rasterio as rio
-import os
-import numpy as np
-import matplotlib.pyplot as plt
 
 MAX_DURATION = 12
+DATA_DIR = Path("data")
+EXTREME_EVENTS_PATH = DATA_DIR / "extreme_events.csv"
+MASK_PATH = DATA_DIR / "mask.tif"
+SUSC_PATH = DATA_DIR / "susc_monti_pisani.tif"
 
 
-df = pd.read_csv('data/extreme_events.csv', parse_dates=['start', 'end'])
-MAX_DAILY_DURATION_DF = pd.DataFrame({
-    'duration_h': df.groupby(df['start'].dt.date).duration_h.max()
-}).reset_index()
+@dataclass(frozen=True)
+class ProbabilityInputs:
+    max_daily_duration_df: pd.DataFrame
+    mask: np.ndarray
+    susc: np.ndarray
 
-with rio.open('data/mask.tif') as src:
-    mask = src.read(1) > 0
 
-with rio.open('data/clc_2018.tif') as src:
-    veg = src.read(1)
+@lru_cache(maxsize=1)
+def load_probability_inputs() -> ProbabilityInputs:
+    df = pd.read_csv(EXTREME_EVENTS_PATH, parse_dates=["start", "end"])
+    max_daily_duration_df = pd.DataFrame(
+        {"duration_h": df.groupby(df["start"].dt.date).duration_h.max()}
+    ).reset_index()
 
-with rio.open('data/susc_monti_pisani.tif') as src:
-    susc = src.read(1)
+    with rio.open(MASK_PATH) as src:
+        mask = src.read(1) > 0
 
-#%%
-gen = np.random.Generator(np.random.PCG64(42))
+    with rio.open(SUSC_PATH) as src:
+        susc = src.read(1)
 
-def extract_ignition_points(n_events: int) -> list[tuple[int, int]]:
-    # sample a random ignition point within the mask according to the susc map
+    return ProbabilityInputs(
+        max_daily_duration_df=max_daily_duration_df,
+        mask=mask,
+        susc=susc,
+    )
+
+def extract_ignition_points(
+    n_events: int,
+    rng: np.random.Generator | None = None,
+    data: ProbabilityInputs | None = None,
+) -> list[tuple[int, int]]:
+    """Sample ignition coordinates using the susceptibility map as weights."""
+    rng = rng or np.random.default_rng()
+    data = data or load_probability_inputs()
+
+    susc_masked = np.where(data.mask, data.susc, 0)
+    susc_flat = susc_masked.flatten() ** 4  # emphasize high susc areas
+    susc_prob = susc_flat / susc_flat.sum()
+
     ignition_points = []
     for _ in range(n_events):
-        susc_masked = np.where(mask, susc, 0)
-        susc_flat = susc_masked.flatten() ** 4  # emphasize high susc areas
-        susc_flat = susc_flat / susc_flat.sum()  # normalize to sum to 1
-
-        point = gen.choice(np.arange(susc_flat.size), p=susc_flat)
+        point = rng.choice(np.arange(susc_prob.size), p=susc_prob)
         point = np.unravel_index(point, susc_masked.shape)
         ignition_points.append((int(point[0]), int(point[1])))
-    print(ignition_points)
     return ignition_points
 
 
-def sample_event_durations(random_state: int | None = None) -> list[int]:
+def sample_event_durations(
+    rng: np.random.Generator | None = None,
+    data: ProbabilityInputs | None = None,
+) -> list[int]:
     """
     Ritorna una lista di durate (in ore) simulata come un anno tipico del dataset.
     Il numero di eventi è campionato dalla distribuzione dei conteggi annuali.
@@ -55,10 +80,11 @@ def sample_event_durations(random_state: int | None = None) -> list[int]:
     -------
     list[int] : durate simulate in ore
     """
-    rng = np.random.default_rng(random_state)
+    rng = rng or np.random.default_rng()
+    data = data or load_probability_inputs()
 
     # estrai anno da start
-    df = MAX_DAILY_DURATION_DF.copy()
+    df = data.max_daily_duration_df.copy()
     df["year"] = pd.to_datetime(df["start"]).dt.year
 
     # distribuzione dei conteggi annuali
@@ -76,4 +102,3 @@ def sample_event_durations(random_state: int | None = None) -> list[int]:
     sampled_durations = sampled_durations[mask]
 
     return sampled_durations.tolist()
-

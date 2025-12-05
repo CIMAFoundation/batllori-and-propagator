@@ -59,7 +59,6 @@ def create_boundary_conditions(
 def start_simulation(
         simulator: Propagator, 
         boundary_conditions: BoundaryConditions,
-        time_limit: int,
     ):
     """
     Start the fire simulation with given boundary conditions up to a time limit (in seconds).
@@ -89,8 +88,6 @@ def start_simulation(
             simulator.step()
         except PropagatorOutOfBoundsError:
             print("Simulation stopped: fire reached out of bounds area.")
-            break
-        if simulator.time >= time_limit:
             break
 
 def get_fire_scar(simulator: Propagator, threshold: float) -> tuple[np.ndarray, np.ndarray]:

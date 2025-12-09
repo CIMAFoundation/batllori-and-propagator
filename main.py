@@ -25,13 +25,13 @@ STD_NUMBER_EVENTS_PER_YEAR = 5
 
 
 EXTREME_EVENT_WIND_SPEED = 40.0
-EXTREME_EVENT_WIND_DIRECTION = 45.0
-EXTREME_EVENT_FUEL_MOISTURE = 3.0
-EXTREME_TIME_LIMIT = 86400  # seconds
+EXTREME_EVENT_WIND_DIRECTION = 30.0
+EXTREME_EVENT_FUEL_MOISTURE = 5.0
+EXTREME_TIME_LIMIT = 28800  # seconds (8 hours)
 
 NORMAL_EVENT_WIND_SPEED = 5.0
 NORMAL_EVENT_FUEL_MOISTURE = 15.0
-NORMAL_TIME_LIMIT = 3600  # seconds
+NORMAL_TIME_LIMIT = 3600  # seconds (1 hour)
 
 
 SEED = 42
@@ -83,6 +83,7 @@ class FireEvent:
     wind_speed: float
     fuel_moisture: float
     time_limit: int
+    is_extreme: bool = False
 
 
 
@@ -230,6 +231,7 @@ def generate_fire_events(
                 wind_dir=wind_direction,
                 fuel_moisture=fuel_moisture,
                 time_limit=time_limit,
+                is_extreme=is_extreme,
             )
         )
 
@@ -310,9 +312,7 @@ def save_vegetation_and_fire_map(
     masked_map = np.where(mask, propagator_map, np.nan)
     im = ax.imshow(masked_map, cmap=PROPAGATOR_CMAP, norm=PROPAGATOR_NORM)
     masked_fire = np.where(mask, fire_scars, np.nan)
-    # ax.contour(np.ma.masked_invalid(masked_fire), [0.5], colors=["red"])
-    masked_fire_ok = np.where(masked_fire >= 0.5, 1.0, np.nan)
-    ax.imshow(np.ma.masked_invalid(masked_fire_ok), cmap='Reds')
+    ax.contour(np.ma.masked_invalid(masked_fire), [0.5], colors=["red"])
     cbar = fig.colorbar(
         im,
         ax=ax,
@@ -329,6 +329,7 @@ def save_proportions_over_time(
     proportions_history: np.ndarray,
     fire_counts: np.ndarray,
     burned_area: np.ndarray,
+    n_extreme: np.ndarray,
 ) -> None:
     timesteps = np.arange(1, proportions_history.shape[1] + 1)
     fig, (ax_line, ax_bar) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
@@ -421,7 +422,11 @@ def main() -> None:
             mask,
             rng,
         )
+        n_extreme = sum(event.is_extreme for event in fire_events)
+        
+        print("-------------------------------------------------------")
         print(f"Timestep {timestep + 1}: {len(fire_events)} ignitions.")
+        print(f"Number of extreme events: {n_extreme}")
 
         fire_scars, _ = run_fire_events(fire_events, dem, propagator_veg, rng)
         fire_counts[timestep] = len(fire_events)

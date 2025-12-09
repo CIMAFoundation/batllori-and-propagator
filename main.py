@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import rasterio as rio
 from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.gridspec import GridSpec
 
 from batllori_6cl import Batllori6CL
 from propagator_module import (
@@ -34,7 +35,8 @@ NORMAL_EVENT_FUEL_MOISTURE = 15.0
 NORMAL_TIME_LIMIT = 3600  # seconds (1 hour)
 
 
-SEED = 42
+# SEED = 42
+SEED = None
 DATA_DIR = Path("data")
 DEM_PATH = DATA_DIR / "dem.tif"
 VEG_PATH = DATA_DIR / "clc_2018.tif"
@@ -209,7 +211,7 @@ def generate_fire_events(
     ignition_coords = extract_ignition_points(
         n_events, rng=rng, mask=mask
     )
-    extreme_events_flags = rng.uniform(0, 1, n_events) < 0.01
+    extreme_events_flags = rng.uniform(0, 1, n_events) < 0.05
 
     events: list[FireEvent] = []
     for is_extreme, coord in zip(extreme_events_flags, ignition_coords):
@@ -329,10 +331,13 @@ def save_proportions_over_time(
     proportions_history: np.ndarray,
     fire_counts: np.ndarray,
     burned_area: np.ndarray,
-    n_extreme: np.ndarray,
+    extreme_events: np.ndarray,
 ) -> None:
     timesteps = np.arange(1, proportions_history.shape[1] + 1)
-    fig, (ax_line, ax_bar) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    # fig, (ax_line, ax_bar) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    fig = plt.figure(figsize=(10, 8))
+    gs = GridSpec(3, 1, height_ratios=[2, 2, 1], figure=fig)
+    ax_line = fig.add_subplot(gs[0, 0])
     for batllori_class in range(BATLLORI_CLASSES):
         ax_line.plot(
             proportions_history[batllori_class, :],
@@ -340,9 +345,12 @@ def save_proportions_over_time(
         )
     ax_line.set_title("Relative Batllori Class Area Over Time")
     ax_line.set_ylabel("Area proportion (relative to initial state)")
-    ax_line.legend(loc="upper right")
+    ax_line.legend(loc="upper left", bbox_to_anchor=(1, 1))
+    ax_line.set_xlim(0, TIMESTEPS+1)
+    ax_line.label_outer()
 
     width = 0.4
+    ax_bar = fig.add_subplot(gs[1, 0])
     bars_counts = ax_bar.bar(
         timesteps - width / 2,
         fire_counts,
@@ -364,7 +372,23 @@ def save_proportions_over_time(
     ax_bar.set_xlabel("Timestep")
     handles = [bars_counts, bars_area]
     labels = [h.get_label() for h in handles]
-    ax_bar.legend(handles, labels, loc="upper left")
+    ax_bar.legend(handles, labels, loc="upper right")
+    ax_bar.set_xlim(0, TIMESTEPS+1)
+    ax_bar.label_outer()
+
+    ax_extreme = fig.add_subplot(gs[2, 0])
+    ax_extreme.bar(
+        timesteps,
+        extreme_events,
+        width=width,
+        color="tab:red",
+        label="Extreme events",
+    )
+    ax_extreme.set_ylabel("Extreme events")
+    ax_extreme.set_xlabel("Timestep")
+    ax_extreme.set_xlim(0, TIMESTEPS+1)
+    ax_extreme.legend(loc="upper right")
+    ax_extreme.label_outer()
 
     fig.tight_layout()
     fig.savefig(OUTPUT_DIR / "veg_area_over_time.png")
@@ -413,6 +437,7 @@ def main() -> None:
     proportions_history = np.full((BATLLORI_CLASSES, TIMESTEPS), np.nan)
     fire_counts = np.zeros(TIMESTEPS, dtype=int)
     burned_area = np.zeros(TIMESTEPS, dtype=int)
+    extreme_events = np.zeros(TIMESTEPS, dtype=int)
 
     for timestep in range(TIMESTEPS):
         batllori_veg = batllori_model.get_vegetation_map()
@@ -431,13 +456,14 @@ def main() -> None:
         fire_scars, _ = run_fire_events(fire_events, dem, propagator_veg, rng)
         fire_counts[timestep] = len(fire_events)
         burned_area[timestep] = np.where(mask, fire_scars > 0, False).sum()
+        extreme_events[timestep] = n_extreme
         batllori_model.step(fire_scars)
 
         update_proportions_history(
             batllori_veg, mask, initial_proportions, proportions_history, timestep
         )
         save_vegetation_and_fire_map(batllori_veg, fire_scars, mask, timestep)
-        save_proportions_over_time(proportions_history, fire_counts, burned_area)
+        save_proportions_over_time(proportions_history, fire_counts, burned_area, extreme_events)
         save_batllori_heatmaps(batllori_veg, mask, fire_scars, timestep)
 
     plt.close("all")

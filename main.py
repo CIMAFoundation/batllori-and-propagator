@@ -18,18 +18,20 @@ from propagator_module import (
 )
 
 TIMESTEPS = 100
-OUTPUT_DIR = Path("output/nromal")
+OUTPUT_DIR = Path("output/normal")
 
-MEAN_NUMBER_EVENTS_PER_YEAR = 30
+MEAN_NUMBER_EVENTS_PER_YEAR = 10
 STD_NUMBER_EVENTS_PER_YEAR = 5
 
 
 EXTREME_EVENT_WIND_SPEED = 40.0
 EXTREME_EVENT_WIND_DIRECTION = 45.0
 EXTREME_EVENT_FUEL_MOISTURE = 3.0
+EXTREME_TIME_LIMIT = 86400  # seconds
 
 NORMAL_EVENT_WIND_SPEED = 5.0
-NORMAL_EVENT_FUEL_MOISTURE = 30.0
+NORMAL_EVENT_FUEL_MOISTURE = 15.0
+NORMAL_TIME_LIMIT = 3600  # seconds
 
 
 SEED = 42
@@ -80,6 +82,7 @@ class FireEvent:
     wind_dir: float
     wind_speed: float
     fuel_moisture: float
+    time_limit: int
 
 
 
@@ -200,7 +203,8 @@ def generate_fire_events(
     # extreme events: for those events, 0.01 probability of being an extreme event
     
     n_events = int(rng.normal(MEAN_NUMBER_EVENTS_PER_YEAR, STD_NUMBER_EVENTS_PER_YEAR))
-
+    if n_events < 0:
+        n_events = 0
     ignition_coords = extract_ignition_points(
         n_events, rng=rng, mask=mask
     )
@@ -212,10 +216,12 @@ def generate_fire_events(
             wind_speed = EXTREME_EVENT_WIND_SPEED
             wind_direction = EXTREME_EVENT_WIND_DIRECTION
             fuel_moisture = EXTREME_EVENT_FUEL_MOISTURE
+            time_limit = EXTREME_TIME_LIMIT  # seconds
         else:
             wind_speed = rng.normal(NORMAL_EVENT_WIND_SPEED, 2.0)
             wind_direction = float(rng.uniform(0, 360))
             fuel_moisture = rng.normal(NORMAL_EVENT_FUEL_MOISTURE, 2.0)
+            time_limit = NORMAL_TIME_LIMIT  # seconds
 
         events.append(
             FireEvent(
@@ -223,6 +229,7 @@ def generate_fire_events(
                 wind_speed=wind_speed,
                 wind_dir=wind_direction,
                 fuel_moisture=fuel_moisture,
+                time_limit=time_limit,
             )
         )
 
@@ -263,14 +270,14 @@ def simulate_single_fire(
     wind_speed = event.wind_speed
     wind_direction = event.wind_dir
     fuel_moisture = event.fuel_moisture
+    time_limit = event.time_limit
     boundary_conditions = create_boundary_conditions(
-        veg,
         wind_speed,
         wind_direction,
         fuel_moisture,
         event.coord,
     )
-    start_simulation(simulator, boundary_conditions)
+    start_simulation(simulator, boundary_conditions, time_limit)
     return get_fire_scar(simulator, threshold=FIRE_SCAR_THRESHOLD)
 
 
@@ -303,7 +310,9 @@ def save_vegetation_and_fire_map(
     masked_map = np.where(mask, propagator_map, np.nan)
     im = ax.imshow(masked_map, cmap=PROPAGATOR_CMAP, norm=PROPAGATOR_NORM)
     masked_fire = np.where(mask, fire_scars, np.nan)
-    ax.contour(np.ma.masked_invalid(masked_fire), [0.5], colors=["red"])
+    # ax.contour(np.ma.masked_invalid(masked_fire), [0.5], colors=["red"])
+    masked_fire_ok = np.where(masked_fire >= 0.5, 1.0, np.nan)
+    ax.imshow(np.ma.masked_invalid(masked_fire_ok), cmap='Reds')
     cbar = fig.colorbar(
         im,
         ax=ax,

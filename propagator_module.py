@@ -22,7 +22,6 @@ def get_simulator(dem: np.ndarray,veg: np.ndarray, realizations: int = 10) -> Pr
 
 
 def create_boundary_conditions(
-        dem: np.ndarray,
         wind_speed: float, 
         wind_direction: float,
         fuel_moisture: float,
@@ -31,8 +30,6 @@ def create_boundary_conditions(
     """Create boundary conditions for the simulation including ignition mask, wind, and moisture.   
     Parameters
     ----------
-    dem : np.ndarray
-        A 2D numpy array representing the digital elevation model.
     wind_speed : float
         The wind speed to be applied uniformly across the grid. [km/h]
     wind_direction : float
@@ -59,6 +56,7 @@ def create_boundary_conditions(
 def start_simulation(
         simulator: Propagator, 
         boundary_conditions: BoundaryConditions,
+        time_limit: int
     ):
     """
     Start the fire simulation with given boundary conditions up to a time limit (in seconds).
@@ -88,6 +86,9 @@ def start_simulation(
             simulator.step()
         except PropagatorOutOfBoundsError:
             print("Simulation stopped: fire reached out of bounds area.")
+            break
+        if simulator.time >= time_limit:
+            print("End of simulation.")
             break
 
 def get_fire_scar(simulator: Propagator, threshold: float) -> tuple[np.ndarray, np.ndarray]:

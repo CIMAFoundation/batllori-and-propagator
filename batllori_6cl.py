@@ -12,7 +12,7 @@ INVALID_VALUES = (-9999, -3333, -6666)
 class ModelParams:
     k_sy_sm: float = 0.1
     k_ry_rm: float = 0.1
-    k_au: float = 0.01
+    k_au: float = 0.03
     rho_s: float = 0.05
     rho_sy: float = 0.0125
     rho_r: float = 0.015

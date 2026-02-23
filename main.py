@@ -5,12 +5,12 @@ from pathlib import Path
 from typing import Iterable
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
 import rasterio as rio
+from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.gridspec import GridSpec
 
 from batllori_6cl import Batllori6CL
-from extract_probabilities import extract_ignition_points, sample_event_durations
 from propagator_module import (
     create_boundary_conditions,
     get_fire_scar,
@@ -19,15 +19,25 @@ from propagator_module import (
 )
 
 TIMESTEPS = 100
-MEAN_WIND_SPEED = 10.0
-STD_WIND_SPEED = 5.0
-MEAN_FUEL_MOISTURE = 10.0
-STD_FUEL_MOISTURE = 5.0
-SEED = 42
+OUTPUT_DIR = Path("output/normal")
+
+MEAN_NUMBER_EVENTS_PER_YEAR = 10
+STD_NUMBER_EVENTS_PER_YEAR = 5
 
 
+EXTREME_EVENT_WIND_SPEED = 40.0
+EXTREME_EVENT_WIND_DIRECTION = 30.0
+EXTREME_EVENT_FUEL_MOISTURE = 5.0
+EXTREME_TIME_LIMIT = 28800  # seconds (8 hours)
+
+NORMAL_EVENT_WIND_SPEED = 5.0
+NORMAL_EVENT_FUEL_MOISTURE = 15.0
+NORMAL_TIME_LIMIT = 3600  # seconds (1 hour)
+
+
+# SEED = 42
+SEED = None
 DATA_DIR = Path("data")
-OUTPUT_DIR = Path("output")
 DEM_PATH = DATA_DIR / "dem.tif"
 VEG_PATH = DATA_DIR / "clc_2018.tif"
 MASK_PATH = DATA_DIR / "mask.tif"
@@ -68,12 +78,15 @@ PROPAGATOR_CMAP.set_bad("#f0f0f0")
 PROPAGATOR_NORM = BoundaryNorm(PROPAGATOR_BOUNDS, PROPAGATOR_CMAP.N)
 
 
-
-
 @dataclass(frozen=True)
 class FireEvent:
-    duration: int
     coord: tuple[int, int]
+    wind_dir: float
+    wind_speed: float
+    fuel_moisture: float
+    time_limit: int
+    is_extreme: bool = False
+
 
 
 def veg_propagator_to_batllori(land_cover: np.ndarray) -> np.ndarray:
@@ -115,31 +128,33 @@ def veg_batllori_to_propagator(veg: np.ndarray) -> np.ndarray:
             proportions = veg[i, j]
             if np.all(proportions == 0):
                 land_cover[i, j] = 3  # Non-vegetated areas
-            idxmax = np.argmax(proportions)
-            match idxmax:
-                case 0:
-                    land_cover[i, j] = 4  # praterie
-                case 1:
-                    land_cover[i, j] = 2  # vegetazione arbustiva
-                case 2 | 3:
-                    land_cover[i, j] = 5  # conifere
-                case 4 | 5:
-                    land_cover[i, j] = 1  # latifoglie
-                case _:
-                    land_cover[i, j] = 0  # nodata or unexpected
+            
+            # new rules: conifers if Sy+Sm > 0.3, shrubs if U > 0.3, broadleaves if Ry+Rm > 0.7, grasslands otherwise
 
+            sum_conifers = proportions[2] + proportions[3]
+            sum_broadleaves = proportions[4] + proportions[5]
+            sum_shrubs = proportions[1]
+            if sum_conifers > 0.3:
+                land_cover[i, j] = 5  # conifere
+            elif sum_shrubs > 0.3:
+                land_cover[i, j] = 2  # vegetazione arbustiva
+            elif sum_broadleaves > 0.7:
+                land_cover[i, j] = 1  # latifoglie
+            else:
+                land_cover[i, j] = 4  # praterie
     return land_cover
 
 
 
 
-def load_rasters() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def load_rasters(mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     with rio.open(DEM_PATH) as dem_src:
         dem = dem_src.read(1).astype("int16")
     with rio.open(VEG_PATH) as veg_src:
         veg = veg_src.read(1).astype("int8")
-    with rio.open(MASK_PATH) as mask_src:
-        mask = mask_src.read(1) > 0
+    if mask is None:
+        with rio.open(MASK_PATH) as mask_src:
+            mask = mask_src.read(1) > 0
     return dem, veg, mask
 
 
@@ -165,10 +180,64 @@ def compute_initial_proportions(batllori_veg: np.ndarray, mask: np.ndarray) -> n
     return initial_proportions
 
 
-def generate_fire_events() -> list[FireEvent]:
-    event_durations = sample_event_durations()
-    ignition_coords = extract_ignition_points(len(event_durations))
-    return [FireEvent(duration, coord) for duration, coord in zip(event_durations, ignition_coords)]
+def extract_ignition_points(
+    n_events: int,
+    rng: np.random.Generator,
+    mask: np.ndarray 
+) -> list[tuple[int, int]]:
+    """Sample ignition coordinates using the susceptibility map as weights."""
+    rng = rng or np.random.default_rng()
+
+    ignition_points = []
+    for _ in range(n_events):
+        point = rng.choice(np.arange(mask.size))
+        point = np.unravel_index(point, mask.shape)
+        ignition_points.append((int(point[0]), int(point[1])))
+
+    return ignition_points
+
+
+def generate_fire_events(
+    mask: np.ndarray,
+    rng: np.random.Generator
+) -> list[FireEvent]:
+    """Generate a list of fire events for the current timestep."""
+    # events per year: 30 on average (sample with gaussian)
+    # extreme events: for those events, 0.01 probability of being an extreme event
+    
+    n_events = int(rng.normal(MEAN_NUMBER_EVENTS_PER_YEAR, STD_NUMBER_EVENTS_PER_YEAR))
+    if n_events < 0:
+        n_events = 0
+    ignition_coords = extract_ignition_points(
+        n_events, rng=rng, mask=mask
+    )
+    extreme_events_flags = rng.uniform(0, 1, n_events) < 0.05
+
+    events: list[FireEvent] = []
+    for is_extreme, coord in zip(extreme_events_flags, ignition_coords):
+        if is_extreme:
+            wind_speed = EXTREME_EVENT_WIND_SPEED
+            wind_direction = EXTREME_EVENT_WIND_DIRECTION
+            fuel_moisture = EXTREME_EVENT_FUEL_MOISTURE
+            time_limit = EXTREME_TIME_LIMIT  # seconds
+        else:
+            wind_speed = rng.normal(NORMAL_EVENT_WIND_SPEED, 2.0)
+            wind_direction = float(rng.uniform(0, 360))
+            fuel_moisture = rng.normal(NORMAL_EVENT_FUEL_MOISTURE, 2.0)
+            time_limit = NORMAL_TIME_LIMIT  # seconds
+
+        events.append(
+            FireEvent(
+                coord=coord,
+                wind_speed=wind_speed,
+                wind_dir=wind_direction,
+                fuel_moisture=fuel_moisture,
+                time_limit=time_limit,
+                is_extreme=is_extreme,
+            )
+        )
+
+    return events
 
 
 def run_fire_events(
@@ -181,7 +250,8 @@ def run_fire_events(
     fire_intensities_list = []
 
     for event in events:
-        fire_scar, intensity = simulate_single_fire(dem, veg, event, rng)
+        print(f'Simulating {event}')
+        fire_scar, intensity = simulate_single_fire(dem, veg, event)
         fire_scars_list.append(fire_scar)
         fire_intensities_list.append(intensity)
 
@@ -198,23 +268,20 @@ def simulate_single_fire(
     dem: np.ndarray,
     veg: np.ndarray,
     event: FireEvent,
-    rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run the external propagator for a single ignition event."""
-    simulator = get_simulator(dem, veg)
-    wind_speed = max(0.0, float(rng.normal(MEAN_WIND_SPEED, STD_WIND_SPEED)))
-    wind_direction = float(rng.uniform(0, 360))
-    fuel_moisture = max(
-        0.0, float(rng.normal(MEAN_FUEL_MOISTURE, STD_FUEL_MOISTURE))
-    )
+    simulator = get_simulator(dem, veg, realizations=5)
+    wind_speed = event.wind_speed
+    wind_direction = event.wind_dir
+    fuel_moisture = event.fuel_moisture
+    time_limit = event.time_limit
     boundary_conditions = create_boundary_conditions(
-        veg,
         wind_speed,
         wind_direction,
         fuel_moisture,
         event.coord,
     )
-    start_simulation(simulator, boundary_conditions, time_limit=event.duration * 3600)
+    start_simulation(simulator, boundary_conditions, time_limit)
     return get_fire_scar(simulator, threshold=FIRE_SCAR_THRESHOLD)
 
 
@@ -260,17 +327,70 @@ def save_vegetation_and_fire_map(
     plt.close(fig)
 
 
-def save_proportions_over_time(proportions_history: np.ndarray) -> None:
-    fig, ax = plt.subplots()
+def save_proportions_over_time(
+    proportions_history: np.ndarray,
+    fire_counts: np.ndarray,
+    burned_area: np.ndarray,
+    extreme_events: np.ndarray,
+) -> None:
+    timesteps = np.arange(1, proportions_history.shape[1] + 1)
+    # fig, (ax_line, ax_bar) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    fig = plt.figure(figsize=(10, 8))
+    gs = GridSpec(3, 1, height_ratios=[2, 2, 1], figure=fig)
+    ax_line = fig.add_subplot(gs[0, 0])
     for batllori_class in range(BATLLORI_CLASSES):
-        ax.plot(
+        ax_line.plot(
             proportions_history[batllori_class, :],
             label=BATLLORI_LABELS[batllori_class],
         )
-    ax.set_title("Relative Batllori Class Area Over Time")
-    ax.set_xlabel("Timestep")
-    ax.set_ylabel("Area proportion (relative to initial state)")
-    ax.legend()
+    ax_line.set_title("Relative Batllori Class Area Over Time")
+    ax_line.set_ylabel("Area proportion (relative to initial state)")
+    ax_line.legend(loc="upper left", bbox_to_anchor=(1, 1))
+    ax_line.set_xlim(0, TIMESTEPS+1)
+    ax_line.label_outer()
+
+    width = 0.4
+    ax_bar = fig.add_subplot(gs[1, 0])
+    bars_counts = ax_bar.bar(
+        timesteps - width / 2,
+        fire_counts,
+        width=width,
+        color="tab:orange",
+        label="Wildfires",
+    )
+    ax_bar_area = ax_bar.twinx()
+    bars_area = ax_bar_area.bar(
+        timesteps + width / 2,
+        burned_area,
+        width=width,
+        color="tab:blue",
+        alpha=0.6,
+        label="Burned pixels",
+    )
+    ax_bar.set_ylabel("Wildfires per timestep")
+    ax_bar_area.set_ylabel("Burned area (pixels)")
+    ax_bar.set_xlabel("Timestep")
+    handles = [bars_counts, bars_area]
+    labels = [h.get_label() for h in handles]
+    ax_bar.legend(handles, labels, loc="upper right")
+    ax_bar.set_xlim(0, TIMESTEPS+1)
+    ax_bar.label_outer()
+
+    ax_extreme = fig.add_subplot(gs[2, 0])
+    ax_extreme.bar(
+        timesteps,
+        extreme_events,
+        width=width,
+        color="tab:red",
+        label="Extreme events",
+    )
+    ax_extreme.set_ylabel("Extreme events")
+    ax_extreme.set_xlabel("Timestep")
+    ax_extreme.set_xlim(0, TIMESTEPS+1)
+    ax_extreme.legend(loc="upper right")
+    ax_extreme.label_outer()
+
+    fig.tight_layout()
     fig.savefig(OUTPUT_DIR / "veg_area_over_time.png")
     plt.close(fig)
 
@@ -284,10 +404,10 @@ def save_batllori_heatmaps(
     fig, axes = plt.subplots(2, 3, figsize=(12, 8))
     axes = axes.ravel()
     masked_fire = np.where(mask, fire_scars, np.nan)
-    for batllori_class in range(BATLLORI_CLASSES):
-        axis = axes[batllori_class]
-        axis.set_title(f"Class {batllori_class + 1}")
-        batllori_slice = batllori_veg[:, :, batllori_class]
+    for idx, batllori_class in enumerate(BATLLORI_LABELS):
+        axis = axes[idx]
+        axis.set_title(f"Class {batllori_class}")
+        batllori_slice = batllori_veg[:, :, idx]
         masked_slice = np.where(mask & (batllori_slice >= 0), batllori_slice, np.nan)
         image = axis.imshow(masked_slice, cmap="Greens", vmin=0.0, vmax=1.0)
         axis.contour(np.ma.masked_invalid(masked_fire), [0.5], colors=["red"], linewidths=0.5)
@@ -302,7 +422,9 @@ def main() -> None:
     rng = np.random.default_rng(SEED)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    dem, raw_veg, mask = load_rasters()
+    with rio.open(MASK_PATH) as src:
+        mask = src.read(1) > 0
+    dem, raw_veg, mask = load_rasters(mask=mask)
     masked_veg = np.where(mask, raw_veg, 0)
     batllori_initial = veg_propagator_to_batllori(masked_veg)
     batllori_initial = apply_initial_noise(batllori_initial, rng)
@@ -313,22 +435,35 @@ def main() -> None:
     batllori_veg = batllori_model.get_vegetation_map()
     initial_proportions = compute_initial_proportions(batllori_veg, mask)
     proportions_history = np.full((BATLLORI_CLASSES, TIMESTEPS), np.nan)
+    fire_counts = np.zeros(TIMESTEPS, dtype=int)
+    burned_area = np.zeros(TIMESTEPS, dtype=int)
+    extreme_events = np.zeros(TIMESTEPS, dtype=int)
 
     for timestep in range(TIMESTEPS):
         batllori_veg = batllori_model.get_vegetation_map()
         propagator_veg = veg_batllori_to_propagator(batllori_veg)
 
-        fire_events = generate_fire_events()
+        fire_events = generate_fire_events(
+            mask,
+            rng,
+        )
+        n_extreme = sum(event.is_extreme for event in fire_events)
+        
+        print("-------------------------------------------------------")
         print(f"Timestep {timestep + 1}: {len(fire_events)} ignitions.")
+        print(f"Number of extreme events: {n_extreme}")
 
         fire_scars, _ = run_fire_events(fire_events, dem, propagator_veg, rng)
+        fire_counts[timestep] = len(fire_events)
+        burned_area[timestep] = np.where(mask, fire_scars > 0, False).sum()
+        extreme_events[timestep] = n_extreme
         batllori_model.step(fire_scars)
 
         update_proportions_history(
             batllori_veg, mask, initial_proportions, proportions_history, timestep
         )
         save_vegetation_and_fire_map(batllori_veg, fire_scars, mask, timestep)
-        save_proportions_over_time(proportions_history)
+        save_proportions_over_time(proportions_history, fire_counts, burned_area, extreme_events)
         save_batllori_heatmaps(batllori_veg, mask, fire_scars, timestep)
 
     plt.close("all")

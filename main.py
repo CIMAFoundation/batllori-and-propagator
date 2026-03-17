@@ -60,7 +60,12 @@ DATA_DIR = Path("data")
 OUTPUT_DIR = Path("output/normal")
 DEM_PATH = DATA_DIR / "dem.tif"  # Digital Elevation Model raster path [m]
 VEG_PATH = DATA_DIR / "clc_2018.tif"  # Land-cover raster path with PROPAGATOR classes
-MASK_PATH = DATA_DIR / "mask.tif"  # mask to define the area of interest (1 for valid cells, 0 for excluded cells)
+
+# SUSCEPTIBILITY_PATH = DATA_DIR / "susc_monti_pisani.tif"  # raster path with fire susceptibility values, which is between 0 and 1 (high susceptibility) [OPTIONAL]
+SUSCEPTIBILITY_PATH = None  # if no susceptibility provided, ignitions will be sampled uniformly in the masked area
+
+MASK_PATH = DATA_DIR / "mask.tif"  # mask to define the area of interest (1 for valid cells, 0 for excluded cells) [OPTIONAL]
+# MASK_PATH = None  # if no mask provided, consider all cells as valid
 
 # >>> plot settings
 BATLLORI_LABELS = [
@@ -100,16 +105,28 @@ PROPAGATOR_NORM = BoundaryNorm(PROPAGATOR_BOUNDS, PROPAGATOR_CMAP.N)
 # HELPERS
 ###############################################################################
 
-def load_rasters(mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Load DEM, vegetation, and mask rasters."""
+def load_rasters(mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Load DEM, vegetation, susceptibility and mask rasters."""
     with rio.open(DEM_PATH) as dem_src:
         dem = dem_src.read(1).astype("int16")
     with rio.open(VEG_PATH) as veg_src:
         veg = veg_src.read(1).astype("int8")
+    if SUSCEPTIBILITY_PATH is not None:
+        with rio.open(SUSCEPTIBILITY_PATH) as susc_src:
+            susceptibility = susc_src.read(1).astype("float32")
+    else:
+        susceptibility = np.ones(dem.shape, dtype="float32")  # if no susceptibility provided, use uniform susceptibility
     if mask is None:
-        with rio.open(MASK_PATH) as mask_src:
-            mask = mask_src.read(1) > 0
-    return dem, veg, mask
+        if MASK_PATH is not None:
+            with rio.open(MASK_PATH) as mask_src:
+                mask = mask_src.read(1) > 0  # boolean mask
+        else:
+            # if no mask provided, consider all cells as valid
+            mask = np.ones(dem.shape, dtype=bool)
+    # add check that all rasters are aligned
+    if not (dem.shape == veg.shape == susceptibility.shape == mask.shape):
+        raise ValueError("Input rasters have different shapes, please check the input files.")
+    return dem, veg, susceptibility, mask
 
 
 def apply_initial_noise(initial_map: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -220,23 +237,42 @@ class FireEvent:
 def extract_ignition_points(
     n_events: int,
     rng: np.random.Generator,
-    mask: np.ndarray 
+    mask: np.ndarray,
+    susceptibility: np.ndarray,
 ) -> list[tuple[int, int]]:
-    """Sample ignition coordinates in the masked area."""
+    """Sample ignition coordinates in the masked area, eventually with probability coming from susceptiblity."""
     rng = rng or np.random.default_rng()
 
     ignition_points = []
     for _ in range(n_events):
-        point = rng.choice(np.arange(mask.size))
-        point = np.unravel_index(point, mask.shape)
-        ignition_points.append((int(point[0]), int(point[1])))
+        # Get valid indices in the masked area
+        valid_indices = np.where(mask)
+        if len(valid_indices[0]) == 0:
+            continue
+        
+        # Extract susceptibility values for valid cells
+        valid_susceptibility = susceptibility[valid_indices]
+        
+        # Normalize susceptibility to create probability distribution
+        susceptibility_sum = valid_susceptibility.sum()
+        if susceptibility_sum > 0:
+            probabilities = valid_susceptibility / susceptibility_sum
+        else:
+            probabilities = np.ones_like(valid_susceptibility) / len(valid_susceptibility)
+        
+        # Sample an index based on susceptibility probabilities
+        sampled_idx = rng.choice(len(valid_indices[0]), p=probabilities)
+        row = int(valid_indices[0][sampled_idx])
+        col = int(valid_indices[1][sampled_idx])
+        ignition_points.append((row, col))
 
     return ignition_points
 
 
 def generate_fire_events(
+    rng: np.random.Generator,
     mask: np.ndarray,
-    rng: np.random.Generator
+    susceptibility: np.ndarray
 ) -> list[FireEvent]:
     """Generate a list of fire events for the current timestep."""
     # sample number of events
@@ -245,7 +281,7 @@ def generate_fire_events(
         n_events = 0
     # extract ignition points
     ignition_coords = extract_ignition_points(
-        n_events, rng=rng, mask=mask
+        n_events, rng=rng, mask=mask, susceptibility=susceptibility
     )
     # define which events are extreme
     extreme_events_flags = rng.uniform(0, 1, n_events) < PROB_EXTREME_EVENT
@@ -467,7 +503,7 @@ def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # load rasters
-    dem, raw_veg, mask = load_rasters()
+    dem, raw_veg, susceptibility, mask = load_rasters()
     masked_veg = np.where(mask, raw_veg, 0)
 
     # setting initial Batllori state based on the land-cover map and applying initial noise
@@ -490,7 +526,7 @@ def main() -> None:
         batllori_veg = batllori_model.get_vegetation_map()
         propagator_veg = veg_batllori_to_propagator(batllori_veg)
         # generate fire events for the current timestep based on the current mask
-        fire_events = generate_fire_events(mask, rng)
+        fire_events = generate_fire_events(rng, mask, susceptibility)
         n_extreme = sum(event.is_extreme for event in fire_events)  # number of extreme events in the current timestep
         
         print("-------------------------------------------------------")

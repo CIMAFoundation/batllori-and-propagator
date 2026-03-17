@@ -524,6 +524,10 @@ class SimulationSummary:
             self.checkpoint_veg[time] = veg_arr.copy()
             self.checkpoint_fire[time] = fire_scar.copy()
 
+    def clean_checkpoints(self):
+        self.checkpoint_veg.clear()
+        self.checkpoint_fire.clear()
+
     def plot_timeseries(self, figsize=(10, 5)):
         """
         One line per class: domain mean fraction over time.
@@ -698,6 +702,7 @@ def main() -> SimulationSummary:
     fig, _ = summary.plot_checkpoint_map(time=0)
     fig.savefig(OUTPUT_DIR / f"timeseries_timestep_{0}.png")
     plt.close(fig)
+    summary.clean_checkpoints()  # clear checkpoints to save memory
 
     # main simulation loop
     for timestep in range(1, TIMESTEPS+1):
@@ -754,6 +759,7 @@ def main() -> SimulationSummary:
         fig, _ = summary.plot_checkpoint_map(time=timestep)
         fig.savefig(OUTPUT_DIR / f"timeseries_timestep_{timestep}.png")
         plt.close(fig)
+        summary.clean_checkpoints()  # clear checkpoints to save memory
 
     return summary
 

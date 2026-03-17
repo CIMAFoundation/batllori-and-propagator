@@ -62,6 +62,8 @@ NORMAL_TIME_LIMIT = 3600  # seconds (1 hour)
 N_FIRE_REALIZATIONS = 5
 # probability threshold to consider a cell as burned in the fire scar map
 FIRE_SCAR_THRESHOLD = 0.3
+# size of cells in meters
+CELL_SIZE = 20
 
 # >>> general settings
 # SEED = 42
@@ -96,11 +98,11 @@ BATLLORI_LABELS = [
 ]
 
 BATLLORI_COLORS = [
-    "#a6d96a",  # grassland
-    "#b35806",  # shrubs
+    "#4fbccf",  # grassland
+    "#ffd700",  # shrubs
     "#ff6b6b",  # conifers - young
-    "#8b0000",  # conifers - mature
-    "#1b7837",  # broadleaves - young
+    "#b60b0b",  # conifers - mature
+    "#a6d96a",  # broadleaves - young
     "#00441b",  # broadleaves - mature
 ]
 
@@ -422,7 +424,11 @@ def simulate_single_fire(
     verbose: bool = False
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run the external propagator for a single ignition event."""
-    simulator = get_simulator(dem, veg, realizations=N_FIRE_REALIZATIONS)
+    simulator = get_simulator(
+        dem, veg,
+        realizations=N_FIRE_REALIZATIONS,
+        cellsize=CELL_SIZE
+    )
     wind_speed = event.wind_speed
     wind_direction = event.wind_dir
     fuel_moisture = event.fuel_moisture
@@ -532,9 +538,8 @@ class SimulationSummary:
                 times, self.mean_history[:, c],
                 label=label, color=self.class_colors[c]
             )
-        ax.set_title("Domain-mean vegetation fraction over time")
+        ax.set_title("Mean vegetation fraction over time")
         ax.set_xlabel("Time")
-        ax.set_ylabel("Mean fraction")
         ax.set_ylim(0, 1)
         ax.set_xlim(0, self.timesteps-1)
         ax.grid(True, alpha=0.3)
@@ -548,7 +553,7 @@ class SimulationSummary:
         )
         ax_events.set_title("Burned area over time")
         ax_events.set_xlabel("Time")
-        ax_events.set_ylabel("N. burned pixels")
+        ax_events.set_ylabel("ha")
         ax_events.grid(True, alpha=0.3)
         ax_events.set_ylim(bottom=0)
         ax_events.set_xlim(0, self.timesteps-1)
@@ -568,9 +573,8 @@ class SimulationSummary:
             labels=self.class_labels, colors=self.class_colors,
             alpha=0.7
         )
-        ax.set_title("Domain composition over time")
+        ax.set_title("Mean vegetation fraction over time")
         ax.set_xlabel("Time")
-        ax.set_ylabel("Mean fraction")
         ax.set_ylim(0, 1)
         ax.set_xlim(0, self.timesteps-1)
         ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
@@ -582,7 +586,7 @@ class SimulationSummary:
         )
         ax_events.set_title("Burned area over time")
         ax_events.set_xlabel("Time")
-        ax_events.set_ylabel("N. burned pixels")
+        ax_events.set_ylabel("ha")
         ax_events.grid(True, alpha=0.3)
         ax_events.set_ylim(bottom=0)
         ax_events.set_xlim(0, self.timesteps-1)
@@ -687,12 +691,13 @@ def main() -> SimulationSummary:
     # plot > initial conditions
     fig, _ = summary.plot_timeseries()
     fig.savefig(OUTPUT_DIR / "timeseries.png")
+    plt.close(fig)
     fig, _ = summary.plot_domain_composition()
     fig.savefig(OUTPUT_DIR / "domain_composition.png")
+    plt.close(fig)
     fig, _ = summary.plot_checkpoint_map(time=0)
     fig.savefig(OUTPUT_DIR / f"timeseries_timestep_{0}.png")
-    plt.close()
-
+    plt.close(fig)
 
     # main simulation loop
     for timestep in range(1, TIMESTEPS+1):
@@ -709,7 +714,7 @@ def main() -> SimulationSummary:
         # number of extreme events in the current timestep
         n_extreme = sum(event.is_extreme for event in fire_events)
 
-        print(f"ignitions: {len(fire_events)} - extreme events: {n_extreme}")
+        print(f"Ignitions: {len(fire_events)} - extreme events: {n_extreme}")
 
         # run the fire simulation for the current vegetation state and
         # fire events, and get the resulting fire scar map
@@ -718,9 +723,10 @@ def main() -> SimulationSummary:
             verbose=False
         )
         # count of burned pixels
-        burned_area = np.where(mask, fire_scars > 0, False).sum()
+        cells_burnt = np.where(mask, fire_scars > 0, False).sum()
+        burned_area = cells_burnt * (CELL_SIZE ** 2) / 10000  # in hectares
 
-        print(f"burned area (pixels): {burned_area}")
+        print(f"burned area [ha]: {burned_area}")
 
         # update the Batllori model with the fire scars as disturbances
         batllori_model.step(fire_scars)
@@ -741,11 +747,13 @@ def main() -> SimulationSummary:
         # plot
         fig, _ = summary.plot_timeseries()
         fig.savefig(OUTPUT_DIR / "timeseries.png")
+        plt.close(fig)
         fig, _ = summary.plot_domain_composition()
         fig.savefig(OUTPUT_DIR / "domain_composition.png")
+        plt.close(fig)
         fig, _ = summary.plot_checkpoint_map(time=timestep)
         fig.savefig(OUTPUT_DIR / f"timeseries_timestep_{timestep}.png")
-        plt.close()
+        plt.close(fig)
 
     return summary
 

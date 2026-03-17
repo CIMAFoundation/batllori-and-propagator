@@ -13,7 +13,8 @@ def get_simulator(
     dem: np.ndarray,
     veg: np.ndarray,
     realizations: int = 10,
-    do_spotting: bool = False
+    do_spotting: bool = False,
+    cellsize: float = 20
 ) -> Propagator:
     """Initialize the Propagator simulator with the given DEM, vegetation, and parameters."""
     simulator = Propagator(
@@ -23,6 +24,7 @@ def get_simulator(
         fuels=FUEL_SYSTEM_LEGACY,
         do_spotting=do_spotting,
         out_of_bounds_mode="raise",
+        cellsize=cellsize
     )
     return simulator
 

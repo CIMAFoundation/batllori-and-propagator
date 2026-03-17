@@ -1,3 +1,4 @@
+# %%
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,17 +19,20 @@ from propagator_module import (
     start_simulation,
 )
 
+# %%
+
 ###############################################################################
 # SETTINGS AND CONFIGURATION
 ###############################################################################
 
 # number of years to simulate in a single realization
-TIMESTEPS = 100
+TIMESTEPS = 10
 
 # >>> Batllori model parameters
 BATLLORI_CLASSES = 6
 INITIAL_NOISE_STD = 0.05  # initial noise injected into vegetation proportions
 WARMUP_STEPS = 5  # number of steps to run the Batllori model before starting the simulation
+BATLLORI_NODATA = [-9999.0, -3333.0]  # values in the initial map to consider as nodata (no vegetation) and non-vegetated areas, respectively
 
 # >>> Fire event generation parameters
 
@@ -57,7 +61,7 @@ FIRE_SCAR_THRESHOLD = 0.3  # probability threshold to consider a cell as burned 
 # SEED = 42
 SEED = None
 DATA_DIR = Path("data")
-OUTPUT_DIR = Path("output/normal")
+OUTPUT_DIR = Path("output")
 DEM_PATH = DATA_DIR / "dem.tif"  # Digital Elevation Model raster path [m]
 VEG_PATH = DATA_DIR / "clc_2018.tif"  # Land-cover raster path with PROPAGATOR classes
 
@@ -75,6 +79,15 @@ BATLLORI_LABELS = [
     "Conifers - mature (Sm)",
     "Broadleaves - young (Ry)",
     "Broadleaves - mature (Rm)",
+]
+
+BATLLORI_COLORS = [
+    "#a6d96a",  # grassland
+    "#b35806",  # shrubs
+    "#ff6b6b",  # conifers - young
+    "#8b0000",  # conifers - mature
+    "#1b7837",  # broadleaves - young
+    "#00441b",  # broadleaves - mature
 ]
 
 PROPAGATOR_CLASS_LABELS = {
@@ -101,6 +114,7 @@ PROPAGATOR_CMAP.set_bad("#f0f0f0")
 PROPAGATOR_NORM = BoundaryNorm(PROPAGATOR_BOUNDS, PROPAGATOR_CMAP.N)
 
 
+# %%
 ###############################################################################
 # HELPERS
 ###############################################################################
@@ -126,7 +140,7 @@ def load_rasters(mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray
     # add check that all rasters are aligned
     if not (dem.shape == veg.shape == susceptibility.shape == mask.shape):
         raise ValueError("Input rasters have different shapes, please check the input files.")
-    return dem, veg, susceptibility, mask
+    return dem, veg, susceptibility, mask  # type: ignore
 
 
 def apply_initial_noise(initial_map: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -151,6 +165,7 @@ def compute_initial_proportions(batllori_veg: np.ndarray, mask: np.ndarray) -> n
     return initial_proportions
 
 
+# %%
 ###############################################################################
 # BATLLORI-PROPAGATOR VEGETATION MAPPING
 ###############################################################################
@@ -330,14 +345,14 @@ def run_fire_events(
     """Run the fire simulation for a list of fire events and return the combined fire scar map and intensity map."""
     fire_scars_list = []
     fire_intensities_list = []
-    print(f"Simulating {len(events)} fires ...")
+    print("Simulating fire events ...")
     for event in events:
         if verbose:        
             print('    ' + event.info())
         fire_scar, intensity = simulate_single_fire(dem, veg, event, verbose)
         fire_scars_list.append(fire_scar)
         fire_intensities_list.append(intensity)
-    print("Simulation of fire events completed.")
+    print("Simulations completed.")
     if not fire_scars_list:
         shape = veg.shape
         return np.zeros(shape, dtype=np.uint8), np.zeros(shape, dtype=np.float32)
@@ -363,153 +378,227 @@ def simulate_single_fire(
         wind_speed,
         wind_direction,
         fuel_moisture,
-        event.coord,\
+        event.coord,
     )
     start_simulation(simulator, boundary_conditions, time_limit, verbose)
     return get_fire_scar(simulator, threshold=FIRE_SCAR_THRESHOLD)
 
 
+# %%
 ###############################################################################
 # OUTPUT AND VISUALIZATION
 ###############################################################################
 
-def update_proportions_history(
-    batllori_veg: np.ndarray,
-    mask: np.ndarray,
-    initial_proportions: np.ndarray,
-    history: np.ndarray,
-    timestep: int,
-) -> None:
-    for batllori_class in range(BATLLORI_CLASSES):
-        batllori_slice = batllori_veg[:, :, batllori_class]
-        batllori_class_sum = np.where(mask & (batllori_slice >= 0), batllori_slice, 0).sum()
-        baseline = initial_proportions[batllori_class]
-        if baseline > 0:
-            ratio = batllori_class_sum / baseline
-            history[batllori_class, timestep] = ratio
-        else:
-            history[batllori_class, timestep] = np.nan
+class SimulationSummary:
 
-
-def save_vegetation_and_fire_map(
-    batllori_veg: np.ndarray,
-    fire_scars: np.ndarray,
-    mask: np.ndarray,
-    timestep: int,
-) -> None:
-    fig, ax = plt.subplots(figsize=(12, 6))
-    propagator_map = veg_batllori_to_propagator(batllori_veg)
-    masked_map = np.where(mask, propagator_map, np.nan)
-    im = ax.imshow(masked_map, cmap=PROPAGATOR_CMAP, norm=PROPAGATOR_NORM)
-    masked_fire = np.where(mask, fire_scars, np.nan)
-    ax.contour(np.ma.masked_invalid(masked_fire), [0.5], colors=["red"])
-    cbar = fig.colorbar(
-        im,
-        ax=ax,
-        ticks=list(PROPAGATOR_CLASS_LABELS.keys()),
-        shrink=0.8,
-        label="Vegetation / fuel class",
-    )
-    cbar.ax.set_yticklabels(PROPAGATOR_CLASS_LABELS.values())
-    fig.savefig(OUTPUT_DIR / f"veg_map{timestep + 1:02d}_fire_scar.png")
-    plt.close(fig)
-
-
-def save_proportions_over_time(
-    proportions_history: np.ndarray,
-    fire_counts: np.ndarray,
-    burned_area: np.ndarray,
-    extreme_events: np.ndarray,
-) -> None:
-    timesteps = np.arange(1, proportions_history.shape[1] + 1)
-    # fig, (ax_line, ax_bar) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    fig = plt.figure(figsize=(10, 8))
-    gs = GridSpec(3, 1, height_ratios=[2, 2, 1], figure=fig)
-    ax_line = fig.add_subplot(gs[0, 0])
-    for batllori_class in range(BATLLORI_CLASSES):
-        ax_line.plot(
-            proportions_history[batllori_class, :],
-            label=BATLLORI_LABELS[batllori_class],
+    def __init__(
+        self,
+        timesteps: int,
+        hist_bins=30
+    ):
+        self.timesteps = timesteps
+        self.n_classes = BATLLORI_CLASSES
+        self.hist_bins = int(hist_bins)
+        self.bin_edges = np.linspace(0.0, 1.0, self.hist_bins + 1)
+        self.nodata_values = BATLLORI_NODATA
+        # statistics storage
+        self.hist_history = np.full(
+            (self.timesteps, self.n_classes, self.hist_bins),
+            np.nan
         )
-    ax_line.set_title("Relative Batllori Class Area Over Time")
-    ax_line.set_ylabel("Area proportion (relative to initial state)")
-    ax_line.legend(loc="upper left", bbox_to_anchor=(1, 1))
-    ax_line.set_xlim(0, TIMESTEPS+1)
-    ax_line.label_outer()
+        self.mean_history = np.full((self.timesteps, self.n_classes), np.nan)
+        # fire information
+        self.fire_counts = np.zeros(self.timesteps, dtype=int)
+        self.burned_area = np.zeros(self.timesteps, dtype=float)
+        self.extreme_events = np.zeros(self.timesteps, dtype=int)
+        # checkpoints for vegetation maps and fire scars
+        self.checkpoint_veg = {}  # timestep -> full array (Nx, Ny, C)
+        self.checkpoint_fire = {}  # timestep -> full array (Nx, Ny)
+        # info for plotting
+        self.class_labels = BATLLORI_LABELS
+        self.class_colors = BATLLORI_COLORS
 
-    width = 0.4
-    ax_bar = fig.add_subplot(gs[1, 0])
-    bars_counts = ax_bar.bar(
-        timesteps - width / 2,
-        fire_counts,
-        width=width,
-        color="tab:orange",
-        label="Wildfires",
-    )
-    ax_bar_area = ax_bar.twinx()
-    bars_area = ax_bar_area.bar(
-        timesteps + width / 2,
-        burned_area,
-        width=width,
-        color="tab:blue",
-        alpha=0.6,
-        label="Burned pixels",
-    )
-    ax_bar.set_ylabel("Wildfires per timestep")
-    ax_bar_area.set_ylabel("Burned area (pixels)")
-    ax_bar.set_xlabel("Timestep")
-    handles = [bars_counts, bars_area]
-    labels = [h.get_label() for h in handles]
-    ax_bar.legend(handles, labels, loc="upper right")
-    ax_bar.set_xlim(0, TIMESTEPS+1)
-    ax_bar.label_outer()
+    def update(
+        self,
+        time: int,
+        veg_arr: np.ndarray,
+        fire_count: int,
+        n_extreme: int,
+        burned_area: float,
+        fire_scar: np.ndarray,
+        checkpoint: bool = False,
+    ) -> None:
+        veg_arr = np.asarray(veg_arr, dtype=float)
+        # check shape
+        if veg_arr.ndim != 3:
+            raise ValueError(f"Expected shape (Nx, Ny, C), got {veg_arr.shape}")
+        if veg_arr.shape[2] != self.n_classes:
+            raise ValueError(
+                f"Expected {self.n_classes} classes, got {veg_arr.shape[2]}"
+            )
+        # remove nodata values from statistics
+        for nodata_value in self.nodata_values:
+            veg_arr = np.where(veg_arr == nodata_value, np.nan, veg_arr)
+        # check range
+        if np.nanmin(veg_arr) < 0 or np.nanmax(veg_arr) > 1:
+            raise ValueError("Values must be between 0 and 1")
+        # compute statistics
+        flat = veg_arr.reshape(-1, self.n_classes)  # (Npix, C)
+        counts = np.stack(
+                [
+                    np.histogram(flat[:, c], bins=self.bin_edges)[0]
+                    for c in range(self.n_classes)
+                ],
+                axis=0,
+            )  # (C, B)
+        means = np.nanmean(flat, axis=0)  # (C,)
+        # store statistics
+        self.hist_history[time] = counts
+        self.mean_history[time] = means
+        # add information about fire events
+        self.fire_counts[time] = fire_count
+        self.burned_area[time] = burned_area
+        self.extreme_events[time] = n_extreme
+        # checkpoint storage > store a copy of the full array
+        if checkpoint:
+            self.checkpoint_veg[time] = veg_arr.copy()
+            self.checkpoint_fire[time] = fire_scar.copy()
 
-    ax_extreme = fig.add_subplot(gs[2, 0])
-    ax_extreme.bar(
-        timesteps,
-        extreme_events,
-        width=width,
-        color="tab:red",
-        label="Extreme events",
-    )
-    ax_extreme.set_ylabel("Extreme events")
-    ax_extreme.set_xlabel("Timestep")
-    ax_extreme.set_xlim(0, TIMESTEPS+1)
-    ax_extreme.legend(loc="upper right")
-    ax_extreme.label_outer()
+    def plot_timeseries(self, figsize=(10, 5)):
+        """
+        One line per class: domain mean fraction over time.
+        """
+        times = np.arange(self.timesteps)
+        fig = plt.figure(figsize=figsize)
+        gs = GridSpec(3, 1, figure=fig)
+        # subplot on vegetation timeseires
+        ax = fig.add_subplot(gs[0:2, 0])
+        for c, label in enumerate(self.class_labels):
+            ax.plot(
+                times, self.mean_history[:, c],
+                label=label, color=self.class_colors[c]
+            )
+        ax.set_title("Domain-mean vegetation fraction over time")
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Mean fraction")
+        ax.set_ylim(0, 1)
+        ax.set_xlim(0, self.timesteps-1)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+        ax.label_outer()
+        # subplot on fire events
+        ax_events = fig.add_subplot(gs[2, 0], sharex=ax)
+        ax_events.bar(
+            times, self.burned_area,
+            label="Burned area", color="tab:blue", alpha=0.7
+        )
+        ax_events.set_title("Burned area over time")
+        ax_events.set_xlabel("Time")
+        ax_events.set_ylabel("N. burned pixels")
+        ax_events.grid(True, alpha=0.3)
+        ax_events.set_ylim(bottom=0)
+        ax_events.set_xlim(0, self.timesteps-1)
+        fig.tight_layout()
+        return fig, ax
 
-    fig.tight_layout()
-    fig.savefig(OUTPUT_DIR / "veg_area_over_time.png")
-    plt.close(fig)
+    def plot_domain_composition(self, figsize=(10, 5)):
+        """
+        Stacked area chart of domain composition over time.
+        """
+        fig = plt.figure(figsize=figsize)
+        gs = GridSpec(3, 1, figure=fig)
+        ax = fig.add_subplot(gs[0:2, 0])
+        # plot domain composition
+        ax.stackplot(
+            np.arange(self.timesteps), self.mean_history.T,
+            labels=self.class_labels, colors=self.class_colors,
+            alpha=0.7
+        )
+        ax.set_title("Domain composition over time")
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Mean fraction")
+        ax.set_ylim(0, 1)
+        ax.set_xlim(0, self.timesteps-1)
+        ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+        # plot burned area on a separate subplot
+        ax_events = fig.add_subplot(gs[2, 0], sharex=ax)
+        ax_events.bar(
+            np.arange(self.timesteps), self.burned_area,
+            label="Burned area", color="tab:blue", alpha=0.7
+        )
+        ax_events.set_title("Burned area over time")
+        ax_events.set_xlabel("Time")
+        ax_events.set_ylabel("N. burned pixels")
+        ax_events.grid(True, alpha=0.3)
+        ax_events.set_ylim(bottom=0)
+        ax_events.set_xlim(0, self.timesteps-1)
+        fig.tight_layout()
+        return fig, ax
+
+    def plot_histograms(self, times: list[int], figsize=(10, 5)):
+        """
+        Plot histograms for specified time steps.
+        """
+        fig, axes = plt.subplots(
+            1, len(times),
+            figsize=figsize, constrained_layout=True
+        )
+        if len(times) == 1:
+            axes = [axes]
+        for t, ax in zip(times, axes):
+            for c in range(self.n_classes):
+                counts = self.hist_history[t, c]
+                centers = 0.5 * (self.bin_edges[:-1] + self.bin_edges[1:])
+                widths = np.diff(self.bin_edges)
+                ax.bar(
+                    centers,
+                    counts,
+                    width=widths,
+                    alpha=0.7,
+                    label=self.class_labels[c],
+                    color=self.class_colors[c]
+                )
+            ax.set_title(f"Histogram of vegetation fractions at time {t}")
+            ax.set_xlabel("Fraction")
+            ax.set_ylabel("Pixel count")
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+        return fig, axes
+
+    def plot_checkpoint_map(self, time: int, figsize=(10, 5)):
+        # check if time is in checkpoints
+        if time not in self.checkpoint_veg or time not in self.checkpoint_fire:
+            raise ValueError(f"Checkpoint for time {time} not found")
+        veg = self.checkpoint_veg[time]
+        fire_scars = self.checkpoint_fire[time]
+        n_classes = self.n_classes
+        nrows = 2
+        ncols = max(n_classes//nrows, 1)
+        fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
+        axes = axes.ravel()
+        for idx, c in enumerate(self.class_labels):
+            axis = axes[idx]
+            axis.set_title(f"{c}")
+            veg_slice = veg[:, :, idx]
+            image = axis.imshow(veg_slice, cmap="Greens", vmin=0.0, vmax=1.0)
+            axis.contour(
+                np.ma.masked_invalid(fire_scars), [0.5],
+                colors=["red"], linewidths=0.5
+            )
+            # remove ticks on both axis
+            axis.set_xticks([])
+            axis.set_yticks([])
+            fig.colorbar(image, ax=axis)
+        fig.tight_layout()
+        return fig, axes
 
 
-def save_batllori_heatmaps(
-    batllori_veg: np.ndarray,
-    mask: np.ndarray,
-    fire_scars: np.ndarray,
-    timestep: int,
-) -> None:
-    fig, axes = plt.subplots(2, 3, figsize=(12, 8))
-    axes = axes.ravel()
-    masked_fire = np.where(mask, fire_scars, np.nan)
-    for idx, batllori_class in enumerate(BATLLORI_LABELS):
-        axis = axes[idx]
-        axis.set_title(f"Class {batllori_class}")
-        batllori_slice = batllori_veg[:, :, idx]
-        masked_slice = np.where(mask & (batllori_slice >= 0), batllori_slice, np.nan)
-        image = axis.imshow(masked_slice, cmap="Greens", vmin=0.0, vmax=1.0)
-        axis.contour(np.ma.masked_invalid(masked_fire), [0.5], colors=["red"], linewidths=0.5)
-        fig.colorbar(image, ax=axis)
-    fig.tight_layout()
-    fig.savefig(OUTPUT_DIR / f"batllori_proportions_timestep_{timestep + 1:02d}.png")
-    plt.close(fig)
-
-
+# %%
 ###############################################################################
 # MAIN SIMULATION LOGIC
 ###############################################################################
 
-def main() -> None:
+def main() -> SimulationSummary:
     rng = np.random.default_rng(SEED)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -517,50 +606,76 @@ def main() -> None:
     dem, raw_veg, susceptibility, mask = load_rasters()
     masked_veg = np.where(mask, raw_veg, 0)
 
-    # setting initial Batllori state based on the land-cover map and applying initial noise
+    # setting initial Batllori state based on the land-cover map
+    # and applying initial noise
     batllori_initial = veg_propagator_to_batllori(masked_veg)
     batllori_initial = apply_initial_noise(batllori_initial, rng)
     batllori_model = Batllori6CL(initial_map=batllori_initial)
-    warm_up_model(batllori_model, steps=WARMUP_STEPS)  # warm-up to let the model stabilize before starting the simulation
+    # warm-up to let the model stabilize before starting the simulation
+    warm_up_model(batllori_model, steps=WARMUP_STEPS)
 
-    # setting up data structures to track outputs
-    batllori_veg = batllori_model.get_vegetation_map()
-    initial_proportions = compute_initial_proportions(batllori_veg, mask)
-    proportions_history = np.full((BATLLORI_CLASSES, TIMESTEPS), np.nan)
-    fire_counts = np.zeros(TIMESTEPS, dtype=int)
-    burned_area = np.zeros(TIMESTEPS, dtype=int)
-    extreme_events = np.zeros(TIMESTEPS, dtype=int)
+    # setting up data structure to track outputs
+    summary = SimulationSummary(timesteps=TIMESTEPS, hist_bins=30)
 
     # main simulation loop
     for timestep in range(TIMESTEPS):
-        # get current vegetation map and translate it into PROPAGATOR land-cover classes
-        batllori_veg = batllori_model.get_vegetation_map()
-        propagator_veg = veg_batllori_to_propagator(batllori_veg)
-        # generate fire events for the current timestep based on the current mask
-        fire_events = generate_fire_events(rng, mask, susceptibility)
-        n_extreme = sum(event.is_extreme for event in fire_events)  # number of extreme events in the current timestep
-        
         print("-------------------------------------------------------")
-        print(f"Timestep {timestep + 1}")
+        print(f"Timestep {timestep}")
+
+        # get current vegetation map and save
+        batllori_veg = batllori_model.get_vegetation_map()
+        # translate it into PROPAGATOR land-cover classes
+        propagator_veg = veg_batllori_to_propagator(batllori_veg)
+
+        # generate fire events for the current timestep based on the mask
+        fire_events = generate_fire_events(rng, mask, susceptibility)
+        # number of fire events in the current timestep
+        fire_count = len(fire_events)
+        # number of extreme events in the current timestep
+        n_extreme = sum(event.is_extreme for event in fire_events)
+
         print(f"ignitions: {len(fire_events)} - extreme events: {n_extreme}")
 
-        # run the fire simulation for the current vegetation state and fire events, and
-        # get the resulting fire scar map
-        fire_scars, _ = run_fire_events(fire_events, dem, propagator_veg, verbose=False)
-        # save outputs and update history
-        fire_counts[timestep] = len(fire_events)
-        burned_area[timestep] = np.where(mask, fire_scars > 0, False).sum()  # count of burned pixels
-        extreme_events[timestep] = n_extreme
+        # run the fire simulation for the current vegetation state and
+        # fire events, and get the resulting fire scar map
+        fire_scars, _ = run_fire_events(
+            fire_events, dem, propagator_veg,
+            verbose=False
+        )
+        # count of burned pixels
+        burned_area = np.where(mask, fire_scars > 0, False).sum()
+
+        print(f"burned area (pixels): {burned_area}")
+
+        # update summary statistics
+        summary.update(
+            time=timestep,
+            veg_arr=batllori_veg,
+            fire_count=fire_count,
+            n_extreme=n_extreme,
+            burned_area=burned_area,
+            checkpoint=True,  # store checkpoints for all timesteps
+            fire_scar=fire_scars
+        )
+
+        # plot
+        fig, _ = summary.plot_timeseries()
+        fig.savefig(OUTPUT_DIR / "timeseries.png")
+        fig, _ = summary.plot_domain_composition()
+        fig.savefig(OUTPUT_DIR / "domain_composition.png")
+        fig, _ = summary.plot_checkpoint_map(time=timestep)
+        fig.savefig(OUTPUT_DIR / f"timeseries_timestep_{timestep}.png")
+        plt.close(fig)
+
         # update the Batllori model with the fire scars as disturbances
         batllori_model.step(fire_scars)
 
-        # update output history and save maps
-        update_proportions_history(batllori_veg, mask, initial_proportions, proportions_history, timestep)
-        save_vegetation_and_fire_map(batllori_veg, fire_scars, mask, timestep)
-        save_proportions_over_time(proportions_history, fire_counts, burned_area, extreme_events)
-        save_batllori_heatmaps(batllori_veg, mask, fire_scars, timestep)
+    return summary
 
-    plt.close("all")
+
+# %%
 
 if __name__ == "__main__":
     main()
+
+# %%

@@ -31,8 +31,8 @@ TIMESTEPS = 10
 # >>> Batllori model parameters
 BATLLORI_CLASSES = 6
 INITIAL_NOISE_STD = 0.05  # initial noise injected into vegetation proportions
-WARMUP_STEPS = 5  # number of steps to run the Batllori model before starting the simulation
-BATLLORI_NODATA = [-9999.0, -3333.0]  # values in the initial map to consider as nodata (no vegetation) and non-vegetated areas, respectively
+WARMUP_STEPS = 5  # number of steps to warm up the Batllori model
+BATLLORI_NODATA = [-9999.0, -3333.0]  # values to consider as nodata
 
 # >>> Fire event generation parameters
 
@@ -54,22 +54,32 @@ NORMAL_EVENT_WIND_SPEED = 5.0
 NORMAL_EVENT_FUEL_MOISTURE = 15.0
 NORMAL_TIME_LIMIT = 3600  # seconds (1 hour)
 
-N_FIRE_REALIZATIONS = 5  # number of stochastic realizations to run for each fire event
-FIRE_SCAR_THRESHOLD = 0.3  # probability threshold to consider a cell as burned in the fire scar map
+# number of stochastic realizations to run for each fire event
+N_FIRE_REALIZATIONS = 5
+# probability threshold to consider a cell as burned in the fire scar map
+FIRE_SCAR_THRESHOLD = 0.3
 
 # >>> general settings
 # SEED = 42
 SEED = None
 DATA_DIR = Path("data")
 OUTPUT_DIR = Path("output")
-DEM_PATH = DATA_DIR / "dem.tif"  # Digital Elevation Model raster path [m]
-VEG_PATH = DATA_DIR / "clc_2018.tif"  # Land-cover raster path with PROPAGATOR classes
 
-# SUSCEPTIBILITY_PATH = DATA_DIR / "susc_monti_pisani.tif"  # raster path with fire susceptibility values, which is between 0 and 1 (high susceptibility) [OPTIONAL]
-SUSCEPTIBILITY_PATH = None  # if no susceptibility provided, ignitions will be sampled uniformly in the masked area
+# Digital Elevation Model raster path [m]
+DEM_PATH = DATA_DIR / "dem.tif"
+# Land-cover raster path with PROPAGATOR classes
+VEG_PATH = DATA_DIR / "clc_2018.tif"
 
-MASK_PATH = DATA_DIR / "mask.tif"  # mask to define the area of interest (1 for valid cells, 0 for excluded cells) [OPTIONAL]
-# MASK_PATH = None  # if no mask provided, consider all cells as valid
+# raster path with fire susceptibility values,
+# which is between 0 and 1 (high susceptibility) [OPTIONAL]
+# SUSCEPTIBILITY_PATH = DATA_DIR / "susc_monti_pisani.tif"
+# if no susceptibility provided, ignitions will be sampled uniformly
+SUSCEPTIBILITY_PATH = None
+
+# mask to define the area of interest (1 for valid cells, 0 for excluded cells)
+MASK_PATH = DATA_DIR / "mask.tif"
+# if no mask provided, consider all cells as valid
+# MASK_PATH = None
 
 # >>> plot settings
 BATLLORI_LABELS = [
@@ -97,8 +107,10 @@ PROPAGATOR_CLASS_LABELS = {
     3: "Bare/Non-vegetated",
     4: "Grasslands",
     5: "Conifers",
-    # 6: "Croplands and agro-forestry areas",  # mapped to "Bare/Non-vegetated" in the simulation
-    # 7: "Not fire-prone forest"  # mapped to "Broadleaves" in the simulation
+    # these classes are mapped to "Bare/Non-vegetated" in the simulation
+    # and not really considered
+    # 6: "Croplands and agro-forestry areas",
+    # 7: "Not fire-prone forest"
 }
 PROPAGATOR_CLASS_COLORS = [
     "#d0d0d0",  # nodata / fallback
@@ -119,7 +131,9 @@ PROPAGATOR_NORM = BoundaryNorm(PROPAGATOR_BOUNDS, PROPAGATOR_CMAP.N)
 # HELPERS
 ###############################################################################
 
-def load_rasters(mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def load_rasters(
+    mask: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Load DEM, vegetation, susceptibility and mask rasters."""
     with rio.open(DEM_PATH) as dem_src:
         dem = dem_src.read(1).astype("int16")
@@ -129,7 +143,8 @@ def load_rasters(mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray
         with rio.open(SUSCEPTIBILITY_PATH) as susc_src:
             susceptibility = susc_src.read(1).astype("float32")
     else:
-        susceptibility = np.ones(dem.shape, dtype="float32")  # if no susceptibility provided, use uniform susceptibility
+        # if no susceptibility provided, use uniform susceptibility
+        susceptibility = np.ones(dem.shape, dtype="float32")
     if mask is None:
         if MASK_PATH is not None:
             with rio.open(MASK_PATH) as mask_src:
@@ -138,13 +153,20 @@ def load_rasters(mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray
             # if no mask provided, consider all cells as valid
             mask = np.ones(dem.shape, dtype=bool)
     # add check that all rasters are aligned
-    if not (dem.shape == veg.shape == susceptibility.shape == mask.shape):
-        raise ValueError("Input rasters have different shapes, please check the input files.")
+    if not (dem.shape == veg.shape ==
+            susceptibility.shape == mask.shape):  # type: ignore
+        raise ValueError("Input rasters have different shapes.")
     return dem, veg, susceptibility, mask  # type: ignore
 
 
-def apply_initial_noise(initial_map: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """Inject small perturbations on vegetation proportions and renormalize proportion vectors."""
+def apply_initial_noise(
+    initial_map: np.ndarray,
+    rng: np.random.Generator
+) -> np.ndarray:
+    """
+    Inject small perturbations on vegetation proportions
+    and renormalize proportion vectors
+    """
     noise = rng.normal(0, INITIAL_NOISE_STD, initial_map.shape)
     perturbed = np.where(initial_map > 0, initial_map + noise, initial_map)
     sums = perturbed.sum(axis=2, keepdims=True)
@@ -156,11 +178,15 @@ def warm_up_model(model: Batllori6CL, steps: int) -> None:
         model.step()
 
 
-def compute_initial_proportions(batllori_veg: np.ndarray, mask: np.ndarray) -> np.ndarray:
+def compute_initial_proportions(
+    batllori_veg: np.ndarray,
+    mask: np.ndarray
+) -> np.ndarray:
     initial_proportions = np.zeros(BATLLORI_CLASSES)
     for batllori_class in range(BATLLORI_CLASSES):
         batllori_slice = batllori_veg[:, :, batllori_class]
-        batllori_class_sum = np.where(mask & (batllori_slice >= 0), batllori_slice, 0).sum()
+        batllori_class_sum = np.where(
+            mask & (batllori_slice >= 0), batllori_slice, 0).sum()
         initial_proportions[batllori_class] = batllori_class_sum
     return initial_proportions
 
@@ -175,13 +201,16 @@ def veg_propagator_to_batllori(land_cover: np.ndarray) -> np.ndarray:
     """Translate land-cover codes into vegetation proportion vectors."""
     grid_size = land_cover.shape[0]
     land_cover = land_cover.copy()
-    initial_map = np.zeros((grid_size, grid_size, BATLLORI_CLASSES), dtype=float)
+    initial_map = np.zeros(
+        (grid_size, grid_size, BATLLORI_CLASSES), dtype=float)
 
     # mapping rules PROPAGATOR -> Batllori
 
     # some classes of PROPAGATOR are removed
-    land_cover[land_cover == 6] = 3  # "croplands" mappet to "bare/non-vegetated"
-    land_cover[land_cover == 7] = 1  # "not fire-prone forest" in "broadleaves"
+    # "croplands" mapped to "bare/non-vegetated"
+    # "not fire-prone forest" in "broadleaves"
+    land_cover[land_cover == 6] = 3
+    land_cover[land_cover == 7] = 1
     vector_map = {
         1: np.array([0, 0, 0, 0, 0.1, 0.9]),  # broadleaves -> Ry, Rm
         2: np.array([0, 1, 0, 0, 0, 0]),  # shrubs -> U
@@ -197,7 +226,8 @@ def veg_propagator_to_batllori(land_cover: np.ndarray) -> np.ndarray:
         for j in range(grid_size):
             code = land_cover[i, j]
             if code not in vector_map:
-                raise ValueError(f"Unexpected land-cover value {code} at position ({i}, {j})")
+                raise ValueError(f"Unexpected land-cover value {code}"
+                                 f"at position ({i}, {j})")
             initial_map[i, j] = vector_map[code]
 
     return initial_map
@@ -213,7 +243,7 @@ def veg_batllori_to_propagator(veg: np.ndarray) -> np.ndarray:
             proportions = veg[i, j]
             if np.all(proportions == 0):
                 land_cover[i, j] = 3  # Non-vegetated areas
-            
+
             # Mapping rules Batllori -> PROPAGATOR
             # conifers if Sy+Sm > 0.3
             # shrubs if U > 0.3
@@ -241,12 +271,19 @@ def veg_batllori_to_propagator(veg: np.ndarray) -> np.ndarray:
 @dataclass(frozen=True)
 class FireEvent:
     """Data class to represent a fire event with its parameters."""
-    coord: tuple[int, int]  # (row, col) coordinates of the ignition point
-    wind_dir: float  # wind direction (from which wind comes) in degrees (0-360, where 0 is from north, 90 is from east, etc.)
-    wind_speed: float  # wind speed in km/h
-    fuel_moisture: float  # fuel moisture content in percentage (0-100)
-    time_limit: int  # maximum simulation time of the event in seconds
-    is_extreme: bool = False  # flag to indicate if the event is extreme
+    # (row, col) coordinates of the ignition point
+    coord: tuple[int, int]
+    # wind direction (from which wind comes) in degrees
+    # (0-360, where 0 is from north, 90 is from east, etc.)
+    wind_dir: float
+    # wind speed in km/h
+    wind_speed: float
+    # fuel moisture content in percentage (0-100)
+    fuel_moisture: float
+    # maximum simulation time of the event in seconds
+    time_limit: int
+    # flag to indicate if the event is extreme
+    is_extreme: bool = False
 
     def info(self) -> str:
         return (f"is_extreme={self.is_extreme} \t"
@@ -263,7 +300,10 @@ def extract_ignition_points(
     mask: np.ndarray,
     susceptibility: np.ndarray,
 ) -> list[tuple[int, int]]:
-    """Sample ignition coordinates in the masked area, eventually with probability coming from susceptiblity."""
+    """
+    Sample ignition coordinates in the masked area,
+    eventually with probability coming from susceptiblity.
+    """
     rng = rng or np.random.default_rng()
 
     ignition_points = []
@@ -272,17 +312,18 @@ def extract_ignition_points(
         valid_indices = np.where(mask)
         if len(valid_indices[0]) == 0:
             continue
-        
+
         # Extract susceptibility values for valid cells
         valid_susceptibility = susceptibility[valid_indices]
-        
+
         # Normalize susceptibility to create probability distribution
         susceptibility_sum = valid_susceptibility.sum()
         if susceptibility_sum > 0:
             probabilities = valid_susceptibility / susceptibility_sum
         else:
-            probabilities = np.ones_like(valid_susceptibility) / len(valid_susceptibility)
-        
+            probabilities = (np.ones_like(valid_susceptibility) /
+                             len(valid_susceptibility))
+
         # Sample an index based on susceptibility probabilities
         sampled_idx = rng.choice(len(valid_indices[0]), p=probabilities)
         row = int(valid_indices[0][sampled_idx])
@@ -299,7 +340,10 @@ def generate_fire_events(
 ) -> list[FireEvent]:
     """Generate a list of fire events for the current timestep."""
     # sample number of events
-    n_events = int(rng.normal(MEAN_NUMBER_EVENTS_PER_YEAR, STD_NUMBER_EVENTS_PER_YEAR))
+    n_events = int(rng.normal(
+        MEAN_NUMBER_EVENTS_PER_YEAR,
+        STD_NUMBER_EVENTS_PER_YEAR)
+    )
     if n_events < 0:
         n_events = 0
     # extract ignition points
@@ -308,7 +352,8 @@ def generate_fire_events(
     )
     # define which events are extreme
     extreme_events_flags = rng.uniform(0, 1, n_events) < PROB_EXTREME_EVENT
-    # assign weather conditions and time limits based on the event type and create FireEvent instances
+    # assign weather conditions and time limits based on
+    # the event type and create FireEvent instances
     events: list[FireEvent] = []
     for is_extreme, coord in zip(extreme_events_flags, ignition_coords):
         if is_extreme:
@@ -342,12 +387,15 @@ def run_fire_events(
     veg: np.ndarray,
     verbose: bool = False
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Run the fire simulation for a list of fire events and return the combined fire scar map and intensity map."""
+    """
+    Run the fire simulation for a list of fire events and
+    return the combined fire scar map and intensity map.
+    """
     fire_scars_list = []
     fire_intensities_list = []
     print("Simulating fire events ...")
     for event in events:
-        if verbose:        
+        if verbose:
             print('    ' + event.info())
         fire_scar, intensity = simulate_single_fire(dem, veg, event, verbose)
         fire_scars_list.append(fire_scar)
@@ -355,7 +403,8 @@ def run_fire_events(
     print("Simulations completed.")
     if not fire_scars_list:
         shape = veg.shape
-        return np.zeros(shape, dtype=np.uint8), np.zeros(shape, dtype=np.float32)
+        return np.zeros(shape, dtype=np.uint8), \
+            np.zeros(shape, dtype=np.float32)
 
     fire_scars = np.max(np.stack(fire_scars_list), axis=0)
     fire_intensities = np.max(np.stack(fire_intensities_list), axis=0)
@@ -431,7 +480,8 @@ class SimulationSummary:
         veg_arr = np.asarray(veg_arr, dtype=float)
         # check shape
         if veg_arr.ndim != 3:
-            raise ValueError(f"Expected shape (Nx, Ny, C), got {veg_arr.shape}")
+            raise ValueError(f"Expected shape (Nx, Ny, C)"
+                             f"got {veg_arr.shape}")
         if veg_arr.shape[2] != self.n_classes:
             raise ValueError(
                 f"Expected {self.n_classes} classes, got {veg_arr.shape[2]}"

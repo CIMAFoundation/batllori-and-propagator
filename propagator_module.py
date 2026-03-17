@@ -9,13 +9,19 @@ from propagator.core import (  # type: ignore
 
 
 
-def get_simulator(dem: np.ndarray,veg: np.ndarray, realizations: int = 10) -> Propagator:
+def get_simulator(
+    dem: np.ndarray,
+    veg: np.ndarray,
+    realizations: int = 10,
+    do_spotting: bool = False
+) -> Propagator:
+    """Initialize the Propagator simulator with the given DEM, vegetation, and parameters."""
     simulator = Propagator(
         dem=dem,
         veg=veg,
         realizations=realizations,
         fuels=FUEL_SYSTEM_LEGACY,
-        do_spotting=False,
+        do_spotting=do_spotting,
         out_of_bounds_mode="raise",
     )
     return simulator
@@ -36,8 +42,8 @@ def create_boundary_conditions(
         The wind direction to be applied uniformly across the grid. [degrees, clockwise, north->south is 0°]
     fuel_moisture : float
         The fuel moisture content to be applied uniformly across the grid. [%]
-    probability_of_ignition : float
-        The probability of ignition for each cell in the grid (optional, default is 0.001).
+    ignition_coords : tuple[int, int]
+        The (row, col) coordinates of the ignition point on the grid.
     Returns
     -------
     BoundaryConditions
@@ -50,7 +56,6 @@ def create_boundary_conditions(
         wind_dir=wind_direction,
         moisture=fuel_moisture,
     )
-    
     return boundary_conditions
 
 def start_simulation(
@@ -70,17 +75,17 @@ def start_simulation(
     time_limit : int
         The maximum simulation time in seconds.
     """
-    
+    # no boundary conitionds provided
     if boundary_conditions.ignitions is None:
         return
-    
+    # no ignitions provided
     if isinstance(boundary_conditions.ignitions, np.ndarray) and boundary_conditions.ignitions.sum() == 0:
         return
     elif isinstance(boundary_conditions.ignitions, list) and len(boundary_conditions.ignitions) == 0:
         return
-    
+    # setting boundary conditions
     simulator.set_boundary_conditions(boundary_conditions)
-    
+    # starting the simulation
     while simulator.next_time() is not None:
         try:
             simulator.step()

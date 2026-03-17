@@ -26,7 +26,7 @@ from propagator_module import (
 ###############################################################################
 
 # number of years to simulate in a single realization
-TIMESTEPS = 10
+TIMESTEPS = 100
 
 # >>> Batllori model parameters
 BATLLORI_CLASSES = 6
@@ -39,6 +39,10 @@ BATLLORI_NODATA = [-9999.0, -3333.0]  # values to consider as nodata
 # the number of fire events per year is a normal distribution
 MEAN_NUMBER_EVENTS_PER_YEAR = 10
 STD_NUMBER_EVENTS_PER_YEAR = 5
+
+# no fire events situation
+# MEAN_NUMBER_EVENTS_PER_YEAR = 0
+# STD_NUMBER_EVENTS_PER_YEAR = 0
 
 # probability of an extreme event among the fire events
 PROB_EXTREME_EVENT = 0.05
@@ -658,6 +662,7 @@ def main() -> SimulationSummary:
 
     # setting initial Batllori state based on the land-cover map
     # and applying initial noise
+    print("Initializing Batllori model ...")
     batllori_initial = veg_propagator_to_batllori(masked_veg)
     batllori_initial = apply_initial_noise(batllori_initial, rng)
     batllori_model = Batllori6CL(initial_map=batllori_initial)
@@ -665,16 +670,36 @@ def main() -> SimulationSummary:
     warm_up_model(batllori_model, steps=WARMUP_STEPS)
 
     # setting up data structure to track outputs
-    summary = SimulationSummary(timesteps=TIMESTEPS, hist_bins=30)
+    summary = SimulationSummary(timesteps=TIMESTEPS+1, hist_bins=30)
+
+    # get current vegetation map -> initial condition
+    batllori_veg = batllori_model.get_vegetation_map()
+    # add initial information
+    summary.update(
+        time=0,
+        veg_arr=batllori_veg,
+        fire_count=0,
+        n_extreme=0,
+        burned_area=0,
+        checkpoint=True,  # store checkpoints for all timesteps
+        fire_scar=np.zeros(batllori_veg.shape[0:2], dtype=np.uint8)
+    )
+    # plot > initial conditions
+    fig, _ = summary.plot_timeseries()
+    fig.savefig(OUTPUT_DIR / "timeseries.png")
+    fig, _ = summary.plot_domain_composition()
+    fig.savefig(OUTPUT_DIR / "domain_composition.png")
+    fig, _ = summary.plot_checkpoint_map(time=0)
+    fig.savefig(OUTPUT_DIR / f"timeseries_timestep_{0}.png")
+    plt.close()
+
 
     # main simulation loop
-    for timestep in range(TIMESTEPS):
+    for timestep in range(1, TIMESTEPS+1):
         print("-------------------------------------------------------")
-        print(f"Timestep {timestep}")
+        print(f"Timestep {timestep}/{TIMESTEPS}")
 
-        # get current vegetation map and save
-        batllori_veg = batllori_model.get_vegetation_map()
-        # translate it into PROPAGATOR land-cover classes
+        # translate vegetation map into PROPAGATOR land-cover classes
         propagator_veg = veg_batllori_to_propagator(batllori_veg)
 
         # generate fire events for the current timestep based on the mask
@@ -697,6 +722,11 @@ def main() -> SimulationSummary:
 
         print(f"burned area (pixels): {burned_area}")
 
+        # update the Batllori model with the fire scars as disturbances
+        batllori_model.step(fire_scars)
+        # get new vegetation map to be saved > used in the next simulation
+        batllori_veg = batllori_model.get_vegetation_map()
+
         # update summary statistics
         summary.update(
             time=timestep,
@@ -715,10 +745,7 @@ def main() -> SimulationSummary:
         fig.savefig(OUTPUT_DIR / "domain_composition.png")
         fig, _ = summary.plot_checkpoint_map(time=timestep)
         fig.savefig(OUTPUT_DIR / f"timeseries_timestep_{timestep}.png")
-        plt.close(fig)
-
-        # update the Batllori model with the fire scars as disturbances
-        batllori_model.step(fire_scars)
+        plt.close()
 
     return summary
 

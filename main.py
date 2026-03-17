@@ -233,6 +233,14 @@ class FireEvent:
     time_limit: int  # maximum simulation time of the event in seconds
     is_extreme: bool = False  # flag to indicate if the event is extreme
 
+    def info(self) -> str:
+        return (f"is_extreme={self.is_extreme} \t"
+                f"coord={self.coord} \t"
+                f"wind_dir={self.wind_dir:.1f}° \t"
+                f"wind_speed={self.wind_speed:.1f} km/h \t"
+                f"fuel_moisture={self.fuel_moisture:.1f}% \t"
+                f"time_limit={self.time_limit}s")
+
 
 def extract_ignition_points(
     n_events: int,
@@ -317,17 +325,19 @@ def run_fire_events(
     events: Iterable[FireEvent],
     dem: np.ndarray,
     veg: np.ndarray,
+    verbose: bool = False
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run the fire simulation for a list of fire events and return the combined fire scar map and intensity map."""
     fire_scars_list = []
     fire_intensities_list = []
-
+    print(f"Simulating {len(events)} fires ...")
     for event in events:
-        print(f'Simulating {event}')
-        fire_scar, intensity = simulate_single_fire(dem, veg, event)
+        if verbose:        
+            print('    ' + event.info())
+        fire_scar, intensity = simulate_single_fire(dem, veg, event, verbose)
         fire_scars_list.append(fire_scar)
         fire_intensities_list.append(intensity)
-
+    print("Simulation of fire events completed.")
     if not fire_scars_list:
         shape = veg.shape
         return np.zeros(shape, dtype=np.uint8), np.zeros(shape, dtype=np.float32)
@@ -341,6 +351,7 @@ def simulate_single_fire(
     dem: np.ndarray,
     veg: np.ndarray,
     event: FireEvent,
+    verbose: bool = False
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run the external propagator for a single ignition event."""
     simulator = get_simulator(dem, veg, realizations=N_FIRE_REALIZATIONS)
@@ -352,9 +363,9 @@ def simulate_single_fire(
         wind_speed,
         wind_direction,
         fuel_moisture,
-        event.coord,
+        event.coord,\
     )
-    start_simulation(simulator, boundary_conditions, time_limit)
+    start_simulation(simulator, boundary_conditions, time_limit, verbose)
     return get_fire_scar(simulator, threshold=FIRE_SCAR_THRESHOLD)
 
 
@@ -530,11 +541,12 @@ def main() -> None:
         n_extreme = sum(event.is_extreme for event in fire_events)  # number of extreme events in the current timestep
         
         print("-------------------------------------------------------")
-        print(f"Timestep {timestep + 1}: {len(fire_events)} ignitions.")
-        print(f"Number of extreme events: {n_extreme}")
+        print(f"Timestep {timestep + 1}")
+        print(f"ignitions: {len(fire_events)} - extreme events: {n_extreme}")
 
-        # run the fire simulation for the current vegetation state and fire events, and get the resulting fire scar map
-        fire_scars, _ = run_fire_events(fire_events, dem, propagator_veg)
+        # run the fire simulation for the current vegetation state and fire events, and
+        # get the resulting fire scar map
+        fire_scars, _ = run_fire_events(fire_events, dem, propagator_veg, verbose=False)
         # save outputs and update history
         fire_counts[timestep] = len(fire_events)
         burned_area[timestep] = np.where(mask, fire_scars > 0, False).sum()  # count of burned pixels

@@ -31,9 +31,16 @@ class ModelParams:
 
 
 class Batllori6CL:
-    """Encapsulates the vegetation–fire dynamics so callers can reuse it without I/O."""
+    """
+    Encapsulates the vegetation–fire dynamics
+    so callers can reuse it without I/O.
+    """
 
-    def __init__(self, initial_map: np.ndarray, params: ModelParams | None = None) -> None:
+    def __init__(
+            self,
+            initial_map: np.ndarray,
+            params: ModelParams | None = None
+    ) -> None:
         self.params = params or ModelParams()
         self.proportions = np.asarray(initial_map, dtype=float).copy()
         if self.proportions.ndim != 3 or self.proportions.shape[2] != 6:
@@ -52,7 +59,10 @@ class Batllori6CL:
         self.mu_r = self.params.rho_r * self.params.fraction
         self.mu_rm = self.params.rho_rm * self.params.fraction
 
-    def step(self, fire_mask: np.ndarray|None = None) -> Dict[str, np.ndarray | float | int]:
+    def step(
+            self,
+            fire_mask: np.ndarray | None = None
+    ) -> Dict[str, np.ndarray | float | int]:
         """Advance the model by one timestep using a boolean fire mask."""
         if fire_mask is None:
             fire_mask = np.zeros((self.grid_size, self.grid_size), dtype=bool)
@@ -91,8 +101,15 @@ class Batllori6CL:
             "fires_this_step": fires_this_step
         }
 
-    def update_vegetation_map(self, new_map: np.ndarray, reset_tsf: bool = False) -> None:
-        """Replace the full vegetation map, optionally resetting TSF counters."""
+    def update_vegetation_map(
+            self,
+            new_map: np.ndarray,
+            reset_tsf: bool = False
+    ) -> None:
+        """
+        Replace the full vegetation map,
+        optionally resetting TSF counters.
+        """
         new_map = np.asarray(new_map, dtype=float)
         if new_map.shape != self.proportions.shape:
             raise ValueError("new_map must match the current map shape")
@@ -100,7 +117,13 @@ class Batllori6CL:
         if reset_tsf:
             self.tsf.fill(0)
 
-    def update_cell(self, row: int, col: int, new_values: np.ndarray, reset_tsf: bool = False) -> None:
+    def update_cell(
+            self,
+            row: int,
+            col: int,
+            new_values: np.ndarray,
+            reset_tsf: bool = False
+    ) -> None:
         """Update a single cell with custom proportions."""
         new_values = np.asarray(new_values, dtype=float)
         if new_values.shape != (6,):
@@ -147,6 +170,7 @@ def clip(value: float, min_value: float, max_value: float) -> float:
         return max_value
     else:
         return value
+
 
 @njit(cache=True)
 def _step_kernel(

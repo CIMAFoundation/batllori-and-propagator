@@ -31,8 +31,11 @@ TIMESTEPS = 100
 BATLLORI_CLASSES = 6
 INITIAL_NOISE_STD = 0.05  # initial noise injected into vegetation proportions
 WARMUP_STEPS = 5  # number of steps to warm up the Batllori model
+# invalid values for battllori vegetations
 BATLLORI_NODATA = -9999
 BATLLORI_NOVEG = -3333
+BATLLORI_CROPS = -6666
+BATLLORI_INVALID_VALUES = [BATLLORI_NODATA, BATLLORI_NOVEG, BATLLORI_CROPS]
 
 # proportion of young and mature conifers in the initial map
 INITIALI_PROPORTIONS_CONIFERS = (0.2, 0.8)
@@ -221,27 +224,32 @@ def veg_propagator_to_batllori(land_cover: np.ndarray) -> np.ndarray:
         (grid_size, grid_size, BATLLORI_CLASSES), dtype=float)
 
     # mapping rules PROPAGATOR -> Batllori
-
-    # some classes of PROPAGATOR are removed
-    # "croplands" mapped to "bare/non-vegetated"
-    # "not fire-prone forest" in "broadleaves"
-    land_cover[land_cover == 6] = 3
-    land_cover[land_cover == 7] = 1
     vector_map = {
+        # nodata
+        0: np.full(BATLLORI_CLASSES, BATLLORI_NODATA),
+        # broadleaves > broadleaves young and mature: Ry, Rm
         1: np.array([0, 0, 0, 0,
                      INITIAL_PROPORTIONS_BROADLEAVES[0],
                      INITIAL_PROPORTIONS_BROADLEAVES[1]
-                     ]),  # broadleaves -> Ry, Rm
-        2: np.array([0, 1, 0, 0, 0, 0]),  # shrubs -> U
-        4: np.array([1, 0, 0, 0, 0, 0]),  # grasslands -> A
+                     ]),
+        # shrubs > shrubs U
+        2: np.array([0, 1, 0, 0, 0, 0]),
+        # bare/Non-vegetated > bare/non-vegetated (invalid value)
+        3: np.full(BATLLORI_CLASSES, BATLLORI_NOVEG),
+        # grasslands > grasslands A
+        4: np.array([1, 0, 0, 0, 0, 0]),
+        # conifers > conifers young and mature: Sy, Sm
         5: np.array([0, 0,
                      INITIALI_PROPORTIONS_CONIFERS[0],
                      INITIALI_PROPORTIONS_CONIFERS[1],
-                     0, 0]),  # conifers -> Sy, Sm
-        0: np.full(BATLLORI_CLASSES, -9999.0),  # nodata
-        3: np.full(BATLLORI_CLASSES, -3333.0),  # bare/Non-vegetated
-        -3333: np.full(BATLLORI_CLASSES, -3333.0),
-        -9999: np.full(BATLLORI_CLASSES, -9999.0),
+                     0, 0]),
+        # crops > crops (invalid value)
+        6: np.full(BATLLORI_CLASSES, BATLLORI_CROPS),
+        # not fire prone forest > broadleaves yound and mature: Ry, Rm
+        7: np.array([0, 0, 0, 0,
+                     INITIAL_PROPORTIONS_BROADLEAVES[0],
+                     INITIAL_PROPORTIONS_BROADLEAVES[1]
+                     ])
     }
 
     for i in range(grid_size):
@@ -287,23 +295,29 @@ def veg_propagator_to_batllori(land_cover: np.ndarray) -> np.ndarray:
 
 
 def sample_propagator_map(batllori_vegetation, rng=None):
-    # Batllori vegetation map: (nrows, ncols, n_batllori_classes)
     if rng is None:
         rng = np.random.default_rng()
-    # mask nodata values per class
-    nodata_mask = np.isin(
-        batllori_vegetation,
-        [BATLLORI_NODATA, BATLLORI_NOVEG]
-    )
-    # pixels where ALL classes are nodata -> force extra "no data" class
-    all_nodata = np.all(nodata_mask, axis=2)   # shape: (nrows, ncols)
-    # for valid pixels, treat nodata entries as 0 before aggregation
+
+    nodata_values = np.concatenate([
+        np.atleast_1d(BATLLORI_NODATA),
+        np.atleast_1d(BATLLORI_NOVEG),
+    ])
+    crop_values = np.atleast_1d(BATLLORI_CROPS)
+
+    nodata_mask = np.isin(batllori_vegetation, nodata_values)
+    crops_mask = np.isin(batllori_vegetation, crop_values)
+
+    all_nodata = np.all(nodata_mask, axis=2)
+    all_crops = np.all(crops_mask, axis=2)
+
+    # remove special-code values from the vegetation proportions
+    invalid_mask = nodata_mask | crops_mask
     batllori_veg_proportions = np.where(
-        nodata_mask,
+        invalid_mask,
         0.0,
         batllori_vegetation
     ).astype(float, copy=False)
-    # aggregate to PROPAGATOR vegetation groups + extra no-data class
+
     p = np.concatenate([
         # class 1 - grasslands
         batllori_veg_proportions[..., 0:1],
@@ -315,21 +329,25 @@ def sample_propagator_map(batllori_vegetation, rng=None):
         batllori_veg_proportions[..., 4:6].sum(axis=2, keepdims=True),
         # class 5 - no data / no vegetation
         all_nodata[..., None].astype(float),
+        # class 6 - crops
+        all_crops[..., None].astype(float),
     ], axis=2)
-    # normalize probabilities
+
     totals = p.sum(axis=2, keepdims=True)
     p = np.divide(p, totals, out=np.zeros_like(p), where=totals > 0)
-    # sample one class per pixel
+
     cdf = np.cumsum(p, axis=2)
     r = rng.random(p.shape[:2])[..., None]
     sampled = (r < cdf).argmax(axis=2)
-    # map sampled aggregated classes to PROPAGATOR classes
+
     # 0 -> grasslands   -> 4
     # 1 -> shrubs       -> 2
     # 2 -> conifers     -> 5
     # 3 -> broadleaves  -> 1
     # 4 -> no data      -> 3
-    mapping = np.array([4, 2, 5, 1, 3], dtype=int)
+    # 5 -> crops        -> 6
+    mapping = np.array([4, 2, 5, 1, 3, 6], dtype=int)
+
     return mapping[sampled]
 
 
@@ -545,7 +563,7 @@ class SimulationSummary:
         self.n_classes = BATLLORI_CLASSES
         self.hist_bins = int(hist_bins)
         self.bin_edges = np.linspace(0.0, 1.0, self.hist_bins + 1)
-        self.nodata_values = [BATLLORI_NODATA, BATLLORI_NOVEG]
+        self.nodata_values = BATLLORI_INVALID_VALUES
         # statistics storage
         self.hist_history = np.full(
             (self.timesteps, self.n_classes, self.hist_bins),

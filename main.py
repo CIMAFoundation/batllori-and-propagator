@@ -65,7 +65,7 @@ NORMAL_EVENT_FUEL_MOISTURE = 15.0
 NORMAL_TIME_LIMIT = 3600  # seconds (1 hour)
 
 # number of stochastic realizations to run for each fire event
-N_FIRE_REALIZATIONS = 5
+N_FIRE_REALIZATIONS = 10
 # probability threshold to consider a cell as burned in the fire scar map
 FIRE_SCAR_THRESHOLD = 0.3
 # size of cells in meters
@@ -194,18 +194,18 @@ def warm_up_model(model: Batllori6CL, steps: int) -> None:
     for _ in range(steps):
         model.step()
 
-
-def compute_initial_proportions(
-    batllori_veg: np.ndarray,
-    mask: np.ndarray
-) -> np.ndarray:
-    initial_proportions = np.zeros(BATLLORI_CLASSES)
-    for batllori_class in range(BATLLORI_CLASSES):
-        batllori_slice = batllori_veg[:, :, batllori_class]
-        batllori_class_sum = np.where(
-            mask & (batllori_slice >= 0), batllori_slice, 0).sum()
-        initial_proportions[batllori_class] = batllori_class_sum
-    return initial_proportions
+# DEPRECATED
+# def compute_initial_proportions(
+#     batllori_veg: np.ndarray,
+#     mask: np.ndarray
+# ) -> np.ndarray:
+#     initial_proportions = np.zeros(BATLLORI_CLASSES)
+#     for batllori_class in range(BATLLORI_CLASSES):
+#         batllori_slice = batllori_veg[:, :, batllori_class]
+#         batllori_class_sum = np.where(
+#             mask & (batllori_slice >= 0), batllori_slice, 0).sum()
+#         initial_proportions[batllori_class] = batllori_class_sum
+#     return initial_proportions
 
 
 # %%
@@ -255,36 +255,36 @@ def veg_propagator_to_batllori(land_cover: np.ndarray) -> np.ndarray:
 
     return initial_map
 
+# DEPRECATED - replaced by sample_propagator_map
+# def veg_batllori_to_propagator(veg: np.ndarray) -> np.ndarray:
+#     """Translate vegetation proportion vectors into land-cover codes."""
+#     grid_size = veg.shape[0]
+#     land_cover = np.zeros((grid_size, grid_size), dtype=np.uint8)
 
-def veg_batllori_to_propagator(veg: np.ndarray) -> np.ndarray:
-    """Translate vegetation proportion vectors into land-cover codes."""
-    grid_size = veg.shape[0]
-    land_cover = np.zeros((grid_size, grid_size), dtype=np.uint8)
+#     for i in range(grid_size):
+#         for j in range(grid_size):
+#             proportions = veg[i, j]
+#             if np.all(proportions == 0):
+#                 land_cover[i, j] = 3  # Non-vegetated areas
 
-    for i in range(grid_size):
-        for j in range(grid_size):
-            proportions = veg[i, j]
-            if np.all(proportions == 0):
-                land_cover[i, j] = 3  # Non-vegetated areas
+#             # Mapping rules Batllori -> PROPAGATOR
+#             # conifers if Sy+Sm > 0.3
+#             # shrubs if U > 0.3
+#             # broadleaves if Ry+Rm > 0.7
+#             # grasslands otherwise
 
-            # Mapping rules Batllori -> PROPAGATOR
-            # conifers if Sy+Sm > 0.3
-            # shrubs if U > 0.3
-            # broadleaves if Ry+Rm > 0.7
-            # grasslands otherwise
-
-            sum_conifers = proportions[2] + proportions[3]
-            sum_broadleaves = proportions[4] + proportions[5]
-            sum_shrubs = proportions[1]
-            if sum_conifers > 0.3:
-                land_cover[i, j] = 5  # conifers
-            elif sum_shrubs > 0.3:
-                land_cover[i, j] = 2  # shrubs
-            elif sum_broadleaves > 0.7:
-                land_cover[i, j] = 1  # broadleaves
-            else:
-                land_cover[i, j] = 4  # grasslands
-    return land_cover
+#             sum_conifers = proportions[2] + proportions[3]
+#             sum_broadleaves = proportions[4] + proportions[5]
+#             sum_shrubs = proportions[1]
+#             if sum_conifers > 0.3:
+#                 land_cover[i, j] = 5  # conifers
+#             elif sum_shrubs > 0.3:
+#                 land_cover[i, j] = 2  # shrubs
+#             elif sum_broadleaves > 0.7:
+#                 land_cover[i, j] = 1  # broadleaves
+#             else:
+#                 land_cover[i, j] = 4  # grasslands
+#     return land_cover
 
 
 def sample_propagator_map(batllori_vegetation, rng=None):

@@ -35,6 +35,10 @@ BATLLORI_NODATA = [
     -9999.0,  # no data
     -3333.0  # non-vegetated areas
 ]
+# proportion of young and mature conifers in the initial map
+INITIALI_PROPORTIONS_CONIFERS = (0.2, 0.8)
+# proportion of young and mature broadleaves in the initial map
+INITIAL_PROPORTIONS_BROADLEAVES = (0.1, 0.9)
 
 # >>> Fire event generation parameters
 
@@ -225,10 +229,16 @@ def veg_propagator_to_batllori(land_cover: np.ndarray) -> np.ndarray:
     land_cover[land_cover == 6] = 3
     land_cover[land_cover == 7] = 1
     vector_map = {
-        1: np.array([0, 0, 0, 0, 0.1, 0.9]),  # broadleaves -> Ry, Rm
+        1: np.array([0, 0, 0, 0,
+                     INITIAL_PROPORTIONS_BROADLEAVES[0],
+                     INITIAL_PROPORTIONS_BROADLEAVES[1]
+                     ]),  # broadleaves -> Ry, Rm
         2: np.array([0, 1, 0, 0, 0, 0]),  # shrubs -> U
         4: np.array([1, 0, 0, 0, 0, 0]),  # grasslands -> A
-        5: np.array([0, 0, 0.2, 0.8, 0, 0]),  # conifers -> Sy, Sm
+        5: np.array([0, 0,
+                     INITIALI_PROPORTIONS_CONIFERS[0],
+                     INITIALI_PROPORTIONS_CONIFERS[1],
+                     0, 0]),  # conifers -> Sy, Sm
         0: np.full(BATLLORI_CLASSES, -9999.0),  # nodata
         3: np.full(BATLLORI_CLASSES, -3333.0),  # bare/Non-vegetated
         -3333: np.full(BATLLORI_CLASSES, -3333.0),

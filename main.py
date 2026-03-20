@@ -14,7 +14,6 @@ from matplotlib.gridspec import GridSpec
 from batllori_6cl import Batllori6CL
 from propagator_module import (
     create_boundary_conditions,
-    get_fire_scar,
     get_simulator,
     start_simulation,
 )
@@ -32,7 +31,10 @@ TIMESTEPS = 100
 BATLLORI_CLASSES = 6
 INITIAL_NOISE_STD = 0.05  # initial noise injected into vegetation proportions
 WARMUP_STEPS = 5  # number of steps to warm up the Batllori model
-BATLLORI_NODATA = [-9999.0, -3333.0]  # values to consider as nodata
+BATLLORI_NODATA = [
+    -9999.0,  # no data
+    -3333.0  # non-vegetated areas
+]
 
 # >>> Fire event generation parameters
 
@@ -88,14 +90,16 @@ MASK_PATH = DATA_DIR / "mask.tif"
 # MASK_PATH = None
 
 # >>> plot settings
-BATLLORI_LABELS = [
-    "Grassland (A)",
-    "Shrubs (U)",
-    "Conifers - young (Sy)",
-    "Conifers - mature (Sm)",
-    "Broadleaves - young (Ry)",
-    "Broadleaves - mature (Rm)",
-]
+BATLLORI_CLASS_LABELS = {
+    0: "Grassland (A)",
+    1: "Shrubs (U)",
+    2: "Conifers - young (Sy)",
+    3: "Conifers - mature (Sm)",
+    4: "Broadleaves - young (Ry)",
+    5: "Broadleaves - mature (Rm)",
+}
+
+BATLLORI_LABELS = list(BATLLORI_CLASS_LABELS.values())
 
 BATLLORI_COLORS = [
     "#4fbccf",  # grassland
@@ -118,6 +122,7 @@ PROPAGATOR_CLASS_LABELS = {
     # 6: "Croplands and agro-forestry areas",
     # 7: "Not fire-prone forest"
 }
+
 PROPAGATOR_CLASS_COLORS = [
     "#d0d0d0",  # nodata / fallback
     "#1b7837",  # broadleaves
@@ -126,6 +131,7 @@ PROPAGATOR_CLASS_COLORS = [
     "#a6d96a",  # grasslands
     "#00441b",  # conifers
 ]
+
 PROPAGATOR_BOUNDS = np.arange(len(PROPAGATOR_CLASS_LABELS) + 1) - 0.5
 PROPAGATOR_CMAP = ListedColormap(PROPAGATOR_CLASS_COLORS)
 PROPAGATOR_CMAP.set_bad("#f0f0f0")
@@ -180,6 +186,7 @@ def apply_initial_noise(
 
 
 def warm_up_model(model: Batllori6CL, steps: int) -> None:
+    """Run the model for a some steps without disturbances to stabilize it."""
     for _ in range(steps):
         model.step()
 
@@ -268,6 +275,45 @@ def veg_batllori_to_propagator(veg: np.ndarray) -> np.ndarray:
             else:
                 land_cover[i, j] = 4  # grasslands
     return land_cover
+
+
+def sample_propagator_map(batllori_vegetation, rng=None):
+    # Batllori vegetation map > (nrows, ncols, n_batllori_classes)
+    if rng is None:
+        rng = np.random.default_rng()
+    # put nan where there are nodata values in any class
+    batllori_veg_proportions = np.where(
+        np.isin(batllori_vegetation, BATLLORI_NODATA),
+        np.nan, batllori_vegetation
+    )
+    # get proportions - aggregate some classes together
+    # to match the PROPAGATOR classes
+    p = np.concatenate([
+        # class 1 - grasslands
+        batllori_veg_proportions[..., 0:1],
+        # class 2 - shrubs
+        batllori_veg_proportions[..., 1:2],
+        # class 3 - conifers (Sy+Sm)
+        batllori_veg_proportions[..., 2:4].sum(axis=2, keepdims=True),
+        # class 4 - broadleaves (Ry+Rm)
+        batllori_veg_proportions[..., 4:6].sum(axis=2, keepdims=True),
+    ], axis=2)
+    # renormalize in case of tiny floating-point errors
+    p = p / p.sum(axis=2, keepdims=True)
+    # sample one class per pixel
+    cdf = np.cumsum(p, axis=2)
+    r = rng.random(p.shape[:2])[..., None]
+    sampled = (cdf >= r).argmax(axis=2)
+    # mapping to PROPAGATOR classes
+    # class 1 - grasslands -> 4
+    # class 2 - shrubs -> 2
+    # class 3 - conifers -> 5
+    # class 4 - broadleaves -> 1
+    mapping = np.array([4, 2, 5, 1])
+    sampled = mapping[sampled]
+    # if nan, put 3
+    sampled = np.where(np.isnan(sampled), 3, sampled)
+    return sampled
 
 
 ###############################################################################
@@ -390,7 +436,7 @@ def generate_fire_events(
 def run_fire_events(
     events: Iterable[FireEvent],
     dem: np.ndarray,
-    veg: np.ndarray,
+    batllori_veg: np.ndarray,
     verbose: bool = False
 ) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -403,12 +449,14 @@ def run_fire_events(
     for event in events:
         if verbose:
             print('    ' + event.info())
-        fire_scar, intensity = simulate_single_fire(dem, veg, event, verbose)
+        fire_scar, intensity = simulate_single_fire(
+            dem, batllori_veg, event, verbose
+        )
         fire_scars_list.append(fire_scar)
         fire_intensities_list.append(intensity)
     print("Simulations completed.")
     if not fire_scars_list:
-        shape = veg.shape
+        shape = dem.shape
         return np.zeros(shape, dtype=np.uint8), \
             np.zeros(shape, dtype=np.float32)
 
@@ -419,16 +467,16 @@ def run_fire_events(
 
 def simulate_single_fire(
     dem: np.ndarray,
-    veg: np.ndarray,
+    batllori_veg: np.ndarray,  # Batllori vegetation map
     event: FireEvent,
     verbose: bool = False
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Run the external propagator for a single ignition event."""
-    simulator = get_simulator(
-        dem, veg,
-        realizations=N_FIRE_REALIZATIONS,
-        cellsize=CELL_SIZE
-    )
+    """
+    Run the external propagator for a single ignition event
+    Each realization sample the vegetation map and then
+    the fire scar and intensity are averaged
+    """
+    # boundary conditions
     wind_speed = event.wind_speed
     wind_direction = event.wind_dir
     fuel_moisture = event.fuel_moisture
@@ -439,8 +487,29 @@ def simulate_single_fire(
         fuel_moisture,
         event.coord,
     )
-    start_simulation(simulator, boundary_conditions, time_limit, verbose)
-    return get_fire_scar(simulator, threshold=FIRE_SCAR_THRESHOLD)
+    scar_list = []
+    intensity_list = []
+    for _ in range(N_FIRE_REALIZATIONS):
+        veg = sample_propagator_map(batllori_veg)
+        simulator = get_simulator(
+            dem, veg,
+            realizations=1,
+            cellsize=CELL_SIZE
+        )
+        start_simulation(simulator, boundary_conditions, time_limit, verbose)
+        # get output
+        output = simulator.get_output()
+        # given 1 simulation, is either 0 or 1
+        fire_scar = output.fire_probability
+        # given 1 simulation, is either 0 or the FLI value
+        fire_intensity = output.fli_mean
+        scar_list.append(fire_scar)
+        intensity_list.append(fire_intensity)
+    # stack them and compute the mean fire scar and intensity
+    fire_prob = np.mean(np.stack(scar_list), axis=0)  # prob of being burned
+    fire_scar_tot = fire_prob >= FIRE_SCAR_THRESHOLD  # binary fire scar map
+    mean_intensity_tot = np.mean(np.stack(intensity_list), axis=0)
+    return fire_scar_tot, mean_intensity_tot
 
 
 # %%
@@ -709,9 +778,6 @@ def main() -> SimulationSummary:
         print("-------------------------------------------------------")
         print(f"Timestep {timestep}/{TIMESTEPS}")
 
-        # translate vegetation map into PROPAGATOR land-cover classes
-        propagator_veg = veg_batllori_to_propagator(batllori_veg)
-
         # generate fire events for the current timestep based on the mask
         fire_events = generate_fire_events(rng, mask, susceptibility)
         # number of fire events in the current timestep
@@ -724,7 +790,7 @@ def main() -> SimulationSummary:
         # run the fire simulation for the current vegetation state and
         # fire events, and get the resulting fire scar map
         fire_scars, _ = run_fire_events(
-            fire_events, dem, propagator_veg,
+            fire_events, dem, batllori_veg,
             verbose=False
         )
         # count of burned pixels
